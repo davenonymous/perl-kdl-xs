@@ -35,7 +35,7 @@ jobs:
         run: perl -V
 
       - name: Install Alien::ckdl from GitHub
-        run: cpanm --notest --verbose git://github.com/davenonymous/perl-alien-ckdl.git
+        run: cpanm --notest --verbose https://github.com/davenonymous/perl-alien-ckdl.git
 
       - name: Install declared dependencies
         run: cpanm --installdeps --notest --verbose .
