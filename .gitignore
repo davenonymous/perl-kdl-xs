@@ -1,0 +1,17 @@
+/blib/
+/Makefile
+/Makefile.old
+/MYMETA.*
+/pm_to_blib
+/_alien/
+/Text-KDL-XS-*/
+*.bak
+*.tmp
+*.swp
+*.o
+*.obj
+*.bs
+*.so
+*.dylib
+XS.c
+ppport.h

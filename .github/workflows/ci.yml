@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Perl ${{ matrix.perl }} on ubuntu-latest
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        perl: ['5.34', '5.36', '5.38', '5.40']
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential pkg-config git
+
+      - name: Set up Perl ${{ matrix.perl }}
+        uses: shogo82148/actions-setup-perl@v1
+        with:
+          perl-version: ${{ matrix.perl }}
+          install-modules-with: cpanm
+
+      - name: Show Perl configuration
+        run: perl -V
+
+      - name: Install Alien::ckdl from GitHub
+        run: cpanm --notest --verbose git://github.com/davenonymous/perl-alien-ckdl.git
+
+      - name: Install declared dependencies
+        run: cpanm --installdeps --notest --verbose .
+
+      - name: Configure
+        run: perl Makefile.PL
+
+      - name: Build
+        run: make
+
+      - name: Test
+        env:
+          HARNESS_OPTIONS: j4
+        run: make test
+
+      - name: Verbose test re-run on failure
+        if: failure()
+        run: prove -lvb t
