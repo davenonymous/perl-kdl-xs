@@ -2,6 +2,11 @@ use strict;
 use warnings;
 use ExtUtils::MakeMaker;
 use Alien::ckdl;
+use Devel::PPPort;
+
+# Generate ppport.h so XS.xs can compile on a fresh checkout.
+# The file is a build artefact and stays out of version control.
+Devel::PPPort::WriteFile('ppport.h') unless -e 'ppport.h';
 
 WriteMakefile(
     DISTNAME         => 'Text-KDL-XS',
@@ -15,6 +20,7 @@ WriteMakefile(
     CONFIGURE_REQUIRES => {
         'ExtUtils::MakeMaker' => '6.64',
         'Alien::ckdl'         => '0',
+        'Devel::PPPort'       => '3.68',
     },
     BUILD_REQUIRES => {
         'Alien::ckdl' => '0',

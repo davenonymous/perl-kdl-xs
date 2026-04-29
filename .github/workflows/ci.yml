@@ -37,8 +37,9 @@ jobs:
       - name: Pre-install Alien::Build toolchain
         # Required because cpanm cannot honour configure_requires when
         # installing Alien::ckdl directly from a git URL (no META.json
-        # exists until its Makefile.PL has already run).
-        run: cpanm --notest Alien::Build::MM
+        # exists until its Makefile.PL has already run). Devel::PPPort
+        # is needed at configure-time to generate ppport.h.
+        run: cpanm --notest Alien::Build::MM Devel::PPPort
 
       - name: Install Alien::ckdl from GitHub
         run: cpanm --notest --verbose https://github.com/davenonymous/perl-alien-ckdl.git
