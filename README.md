@@ -186,20 +186,20 @@ sibling `Alien::ckdl` distribution, so no system package is required.
 
 ## STATUS
 
-Early. The full test suite passes and the API has stabilized around the
+Pre 1.000. The full test suite passes and the API has stabilized around the
 `parse_kdl` / `emit_kdl` pair plus the `Parser`, `Document`, `Node`, and
-`Value` classes - but minor adjustments are still possible before a 1.0
-release. Tracks ckdl's `main` branch.
+`Value` classes - but minor adjustments are still possible before a 1.000
+release. Builds against the pinned ckdl commit shipped by `Alien::ckdl`.
 
 ## API OVERVIEW
 
-| Module | Role |
-|--------|------|
-| [`Text::KDL::XS`](lib/Text/KDL/XS.pm) | Top-level functions: `parse_kdl`, `emit_kdl` |
-| [`Text::KDL::XS::Parser`](lib/Text/KDL/XS/Parser.pm) | Streaming event iterator |
-| [`Text::KDL::XS::Document`](lib/Text/KDL/XS/Document.pm) | Top-level `nodes` container |
-| [`Text::KDL::XS::Node`](lib/Text/KDL/XS/Node.pm) | A node: name, args, props, children |
-| [`Text::KDL::XS::Value`](lib/Text/KDL/XS/Value.pm) | A typed scalar value |
+| Module                                                   | Role                                         |
+|----------------------------------------------------------|----------------------------------------------|
+| [`Text::KDL::XS`](lib/Text/KDL/XS.pm)                    | Top-level functions: `parse_kdl`, `emit_kdl` |
+| [`Text::KDL::XS::Parser`](lib/Text/KDL/XS/Parser.pm)     | Streaming event iterator                     |
+| [`Text::KDL::XS::Document`](lib/Text/KDL/XS/Document.pm) | Top-level `nodes` container                  |
+| [`Text::KDL::XS::Node`](lib/Text/KDL/XS/Node.pm)         | A node: name, args, props, children          |
+| [`Text::KDL::XS::Value`](lib/Text/KDL/XS/Value.pm)       | A typed scalar value                         |
 
 Read the embedded POD (`perldoc Text::KDL::XS`, etc.) for the per-module
 reference.
@@ -218,7 +218,7 @@ reference.
 
 - [`ckdl`](https://github.com/tjol/ckdl) - the underlying C library
 - [KDL spec](https://github.com/kdl-org/kdl)
-- [`Alien::ckdl`](../perl-alien-ckdl) - sibling Alien distribution
+- [`Alien::ckdl`](https://github.com/davenonymous/perl-alien-ckdl) - sibling Alien distribution
 
 ## LICENSE
 

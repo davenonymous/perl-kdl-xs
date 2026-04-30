@@ -259,3 +259,30 @@ sub _coerce_scalar_to_payload {
 }
 
 1;
+
+__END__
+
+=head1 NAME
+
+Text::KDL::XS::Emitter - internal KDL emitter helpers (no public API)
+
+=head1 DESCRIPTION
+
+This module is an implementation detail of L<Text::KDL::XS>. It contains
+the Perl half of the emitter pipeline that bridges Perl data structures
+and the underlying C emitter exposed by the XS layer. All subroutines
+in this package are private (prefixed with an underscore) and may
+change without notice.
+
+End users should call L<Text::KDL::XS/emit_kdl> instead.
+
+=head1 SEE ALSO
+
+L<Text::KDL::XS>
+
+=head1 LICENSE
+
+This Perl distribution is released under the same terms as Perl itself.
+
+=cut
+

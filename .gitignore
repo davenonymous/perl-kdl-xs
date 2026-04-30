@@ -15,3 +15,7 @@
 *.dylib
 XS.c
 ppport.h
+*.tar.gz
+*.a
+*.lib
+RELEASING.md
