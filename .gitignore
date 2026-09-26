@@ -19,3 +19,4 @@ ppport.h
 *.a
 *.lib
 RELEASING.md
+/docs/

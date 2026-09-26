@@ -94,16 +94,97 @@ __END__
 
 =head1 NAME
 
-Text::KDL::XS::Document - Top-level KDL document
+Text::KDL::XS::Document - A parsed KDL document: the list of top-level nodes
+
+=head1 SYNOPSIS
+
+=for highlighter language=Perl
+
+  use Text::KDL::XS qw(parse_kdl emit_kdl);
+
+  my $doc = parse_kdl($text);
+
+  for my $node (@{ $doc->nodes }) {          # Text::KDL::XS::Node objects
+      print $node->name, "\n";
+  }
+
+  my ($server) = grep { $_->name eq 'server' } @{ $doc->nodes };
+
+  my $plain = $doc->as_data;                 # arrayref of plain hashes
+  print emit_kdl($doc);                      # back to KDL text
+
+  # Build one by hand from Text::KDL::XS::Node objects:
+  my $new = Text::KDL::XS::Document->new(nodes => [ $node, Text::KDL::XS::Node->new(name => 'extra') ]);
+
+=for highlighter
+
+=head1 DESCRIPTION
+
+A C<Text::KDL::XS::Document> is what L<Text::KDL::XS/parse_kdl> returns.
+It is a thin container: an ordered list of the document's top-level
+L<Text::KDL::XS::Node> objects. Everything else (arguments, properties,
+children) hangs off the nodes.
+
+Objects are plain blessed hashes and are meant to be modified in place:
+push nodes onto C<< $doc->nodes >>, splice them out, reorder them, then
+pass the document to L<Text::KDL::XS/emit_kdl>. (Restructuring the
+C<props> of a node has a caveat, see L<Text::KDL::XS::Node/prop>.)
+
+=head1 CONSTRUCTOR
+
+=head2 new
+
+=for highlighter language=Perl
+
+  my $doc = Text::KDL::XS::Document->new;
+  my $doc = Text::KDL::XS::Document->new(nodes => \@nodes);
+
+=for highlighter
+
+Creates a document holding the given L<Text::KDL::XS::Node> objects, or an
+empty one. The array reference is stored as is, not copied.
 
 =head1 METHODS
 
-=over 4
+=head2 nodes
 
-=item C<nodes> - arrayref of top-level L<Text::KDL::XS::Node> objects
+=for highlighter language=Perl
 
-=item C<as_data> - lossy plain-Perl view; returns an arrayref
+  my $nodes = $doc->nodes;   # arrayref of Text::KDL::XS::Node, in document order
 
-=back
+=for highlighter
+
+The top-level nodes. Always an array reference, empty for an empty
+document. It is the document's own array, so modifying it modifies the
+document.
+
+=head2 as_data
+
+=for highlighter language=Perl
+
+  my $data = $doc->as_data;  # [ { name => ..., args => [...], ... }, ... ]
+
+=for highlighter
+
+Returns the whole document as plain Perl data: an array reference with one
+hash per top-level node, in the shape described in
+L<Text::KDL::XS::Node/as_data>. This is convenient for dumping, comparing
+in tests, or converting to JSON, but it is lossy: value type annotations,
+number kinds, repeated properties and the boolean/number distinction are
+not represented. Use the node objects when those matter.
+
+=head1 SEE ALSO
+
+L<Text::KDL::XS>, L<Text::KDL::XS::Node>, L<Text::KDL::XS::Value>.
+
+=head1 AUTHOR
+
+Davenonymous E<lt>perl@davenonymous.comE<gt>
+
+=head1 LICENSE
+
+Copyright (C) 2026 Davenonymous.
+
+This Perl distribution is licensed under the same terms as Perl itself.
 
 =cut

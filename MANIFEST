@@ -1,5 +1,6 @@
 Changes
 lib/Text/KDL/XS.pm
+lib/Text/KDL/XS/Cookbook.pod
 lib/Text/KDL/XS/Document.pm
 lib/Text/KDL/XS/Emitter.pm
 lib/Text/KDL/XS/Node.pm
@@ -16,5 +17,6 @@ t/30-streaming-source.t
 t/40-emit.t
 t/41-emit-plain.t
 t/50-errors.t
+t/90-pod.t
 typemap
 XS.xs

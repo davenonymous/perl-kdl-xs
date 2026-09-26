@@ -262,27 +262,48 @@ sub _coerce_scalar_to_payload {
 
 __END__
 
+=encoding utf-8
+
 =head1 NAME
 
-Text::KDL::XS::Emitter - internal KDL emitter helpers (no public API)
+Text::KDL::XS::Emitter - Internal: the Perl half of the KDL emitter
+
+=head1 SYNOPSIS
+
+Do not use this module directly. Call L<Text::KDL::XS/emit_kdl>:
+
+=for highlighter language=Perl
+
+  use Text::KDL::XS qw(emit_kdl);
+  my $text = emit_kdl($document_or_data, %options);
+
+=for highlighter
 
 =head1 DESCRIPTION
 
-This module is an implementation detail of L<Text::KDL::XS>. It contains
-the Perl half of the emitter pipeline that bridges Perl data structures
-and the underlying C emitter exposed by the XS layer. All subroutines
-in this package are private (prefixed with an underscore) and may
-change without notice.
+C<Text::KDL::XS::Emitter> contains the Perl side of the emitter: it walks a
+L<Text::KDL::XS::Document> / L<Text::KDL::XS::Node> tree (tree mode) or a
+plain Perl data structure (data mode), converts each value into a small
+payload hash, and drives the XS wrapper around ckdl's C<kdl_emitter>, which
+produces the text.
 
-End users should call L<Text::KDL::XS/emit_kdl> instead.
+All subroutines and methods in this package start with an underscore, are
+private, and may change without notice between releases. The public
+behaviour, including the data-mode mapping and scalar coercion rules, is
+documented under L<Text::KDL::XS/emit_kdl>.
 
 =head1 SEE ALSO
 
-L<Text::KDL::XS>
+L<Text::KDL::XS>.
+
+=head1 AUTHOR
+
+Davenonymous E<lt>perl@davenonymous.comE<gt>
 
 =head1 LICENSE
 
-This Perl distribution is released under the same terms as Perl itself.
+Copyright (C) 2026 Davenonymous.
+
+This Perl distribution is licensed under the same terms as Perl itself.
 
 =cut
-

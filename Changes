@@ -1,5 +1,14 @@
 Revision history for Text-KDL-XS
 
+0.002  (unreleased)
+        - Complete rewrite of the documentation: full API reference in
+          Text::KDL::XS and the class modules, and a new
+          Text::KDL::XS::Cookbook covering every KDL feature with KDL and
+          Perl examples plus recipes.
+        - Document known issues (float emission, UTF-8 input, filehandle
+          layers, keyword-like strings) with workarounds.
+        - Add t/90-pod.t (POD syntax check).
+
 0.001  2026-04-30
         - Initial CPAN release.
         - XS bindings to the ckdl C library via Alien::ckdl.
