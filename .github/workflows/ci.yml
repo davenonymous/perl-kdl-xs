@@ -9,12 +9,13 @@ on:
 
 jobs:
   test:
-    name: Perl ${{ matrix.perl }} on ubuntu-latest
+    name: Perl ${{ matrix.perl }}${{ matrix.multi-thread && ' with threads' || '' }} on ubuntu-latest
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         perl: ['5.34', '5.36', '5.38', '5.40']
+        multi-thread: [false, true]
 
     steps:
       - name: Checkout
@@ -29,6 +30,7 @@ jobs:
         uses: shogo82148/actions-setup-perl@v1
         with:
           perl-version: ${{ matrix.perl }}
+          multi-thread: ${{ matrix.multi-thread }}
           install-modules-with: cpanm
 
       - name: Show Perl configuration
@@ -58,6 +60,58 @@ jobs:
           HARNESS_OPTIONS: j4
         run: make test
 
+      - name: Test the distribution tarball
+        # Builds the tarball from MANIFEST, unpacks, configures and tests
+        # it, which catches files missing from MANIFEST.
+        run: make disttest
+
       - name: Verbose test re-run on failure
         if: failure()
         run: prove -lvb t
+
+  sanitizers:
+    name: AddressSanitizer and UBSan (Perl 5.40 with threads)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential pkg-config git
+
+      - name: Set up Perl 5.40
+        uses: shogo82148/actions-setup-perl@v1
+        with:
+          perl-version: '5.40'
+          multi-thread: true
+          install-modules-with: cpanm
+
+      - name: Pre-install Alien::Build toolchain
+        run: cpanm --notest Alien::Build::MM Devel::PPPort
+
+      - name: Install Alien::ckdl from GitHub
+        run: cpanm --notest --verbose https://github.com/davenonymous/perl-alien-ckdl.git
+
+      - name: Install declared dependencies
+        run: cpanm --installdeps --notest --verbose .
+
+      - name: Configure with the sanitizers
+        run: >
+          perl Makefile.PL
+          OPTIMIZE="-O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined"
+          LDDLFLAGS="-shared -fsanitize=address,undefined"
+
+      - name: Build
+        run: make
+
+      - name: Test under the sanitizers
+        # perl itself is not built with ASan, so the runtime is preloaded.
+        # Leak checking is off because perl frees little at exit;
+        # halt_on_error makes any UBSan report fail the job.
+        env:
+          ASAN_OPTIONS: detect_leaks=0
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: LD_PRELOAD="$(gcc -print-file-name=libasan.so)" prove -b t

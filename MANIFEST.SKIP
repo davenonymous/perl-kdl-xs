@@ -103,7 +103,6 @@
 
 # Maintainer-only docs (not shipped)
 ^RELEASING\.md$
-^FINDINGS\.md$
 
 # Rendered HTML documentation (generated with pod2metacpan)
 ^docs/

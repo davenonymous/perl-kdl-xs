@@ -21,8 +21,8 @@ Conventions used in the examples:
 =over 4
 
 =item * Where output is shown, it was produced by running the code against
-Text::KDL::XS 0.001. Where the code and its output differ from the KDL
-specification, the text says so.
+this version of Text::KDL::XS. Where the code and its output differ from
+the KDL specification, the text says so.
 
 =item * A Perl snippet that uses C<$kdl> without defining it refers to the
 KDL text shown immediately above it. Snippets that use C<$doc> or C<$node>
@@ -199,7 +199,7 @@ L</"Building nodes and values by hand">
 =item emitting booleans, type annotations, floats, keyword-like strings
 
 L</"Emitting booleans">, L</"Emitting type annotations">,
-L</"Emitting floating point numbers safely">,
+L</"Emitting floating point numbers">,
 L</"Emitting strings that look like keywords or numbers">
 
 =item indent, escape_mode, identifier_mode
@@ -368,8 +368,9 @@ same applies to property keys (C<"my key"=1>) and to type annotations
 L</"Type annotations on nodes">.
 
 When emitting, L<Text::KDL::XS/emit_kdl> quotes names automatically when
-they contain characters that are not allowed in a bare identifier, but not
-when they merely equal a keyword or look like a number; see
+they contain characters that are not allowed in a bare identifier, and
+quotes every identifier of the document when a name merely equals a
+keyword or looks like a number; see
 L</"Emitting strings that look like keywords or numbers">.
 
 =head2 Arguments
@@ -722,11 +723,12 @@ Inside quoted (non-raw) strings the following escapes are recognised:
 
 Any other character after a backslash is a syntax error, and so is a code
 point above U+10FFFF. The specification also forbids surrogates
-(C<\u{D800}> to C<\u{DFFF}>); C<< version => '2' >> rejects them, but
-C<< version => '1' >> and the default detection accept them and return a
-Perl string containing the lone surrogate, which Perl warns about when
-printed. C<\u{}> with no digits at all is accepted and yields U+0000,
-although the specification requires at least one digit.
+(C<\u{D800}> to C<\u{DFFF}>); they are rejected in every version mode
+(in v1 and detection mode with C<KDL parse error: string contains a
+surrogate or a code point above U+10FFFF>). The underlying parser is
+lenient about the digits: C<\u{}> with no digits at all is accepted and
+yields U+0000, although the specification requires at least one digit,
+and more than six digits wrap around (C<\u{1000000041}> is C<A>).
 
 =for highlighter language=KDL
 
@@ -908,8 +910,8 @@ The examples in this part all use this loop:
 =for highlighter language=KDL
 
   integers 42 -7 +3 1_000_000 007
-  limits 9223372036854775807 -9223372036854775807
-  quirks 2147483648 4294967295 -9223372036854775808
+  limits 9223372036854775807 -9223372036854775808
+  unsigned 9223372036854775808 18446744073709551615
 
 =for highlighter
 
@@ -921,32 +923,16 @@ The examples in this part all use this loop:
     kind=integer  value=7
   limits
     kind=integer  value=9223372036854775807
-    kind=integer  value=-9223372036854775807
-  quirks
-    kind=string   value=2147483648
-    kind=string   value=4294967295
-    kind=string   value=-9223372036854775808
+    kind=integer  value=-9223372036854775808
+  unsigned
+    kind=integer  value=9223372036854775808
+    kind=integer  value=18446744073709551615
 
-Integers that fit in a signed 64-bit value are normally
-C<< kind => 'integer' >> with a Perl integer in C<value>. Two exceptions
-come from the underlying ckdl library and are worth knowing:
-
-=over 4
-
-=item * Magnitudes from 2**31 to 2**32 - 1 (2147483648 to 4294967295, which
-includes 32-bit masks such as C<0xFFFFFFFF> and Unix timestamps after
-2038) are returned as C<< kind => 'string' >>.
-
-=item * The most negative 64-bit value, -9223372036854775808, is returned
-as C<< kind => 'string' >>.
-
-=back
-
-The text is still the correct decimal representation, and C<as_perl>
-returns it, so arithmetic on these values works through Perl's usual
-string-to-number conversion. Do not use C<< kind eq 'integer' >> to decide
-whether a number is "small"; test the value instead. Anything beyond 64
-bits is C<string> as well, see L</"Arbitrary precision numbers">.
+Every integer from -2**63 to 2**64-1 is C<< kind => 'integer' >> with a
+Perl integer in C<value>; values above 2**63-1 are unsigned integers
+(UV). C<emit_kdl> writes all of them back exactly. Anything beyond that
+range keeps its digits as C<< kind => 'string' >>, see
+L</"Arbitrary precision numbers">.
 
 =head2 Floating point numbers
 
@@ -978,23 +964,20 @@ kept:
     kind=string   value=1e285
     kind=string   value=1e400
 
-C<value> is a Perl floating point number for the C<float> kind, so C<1e3>
-comes back as C<1000> and prints without a decimal point. When emitted
-again the float kind is remembered: C<emit_kdl> writes the first node as
-C<floats 3.14 -0.5 1000.0 6.02e23 1.5e-4 1000.0 1.5 0.0>. A C<string>
-kind number is written back verbatim.
+C<value> is a Perl floating point number for the C<float> kind, the
+double nearest to the literal, so C<1e3> comes back as C<1000> and prints
+without a decimal point (and C<-0.0> prints as C<0>, although it keeps its
+sign). When emitted again the float kind is remembered: C<emit_kdl> writes
+the first node as C<floats 3.14 -0.5 1000.0 6.02e+23 0.00015 1000.0 1.5
+-0.0>, every float with the shortest text that reads back as the same
+double. A C<string> kind number is written back verbatim.
 
 Note that C<3.141592653589793> (16 digits) is a C<string>, and so are
 C<1.000000000000000> and C<123456789012345.0> (16 digits including the
 zeros), so a double printed with full precision is not a C<float> on the
-way back in; convert with C<< $v->as_number + 0 >> or C<Math::BigFloat>
-as appropriate.
-
-B<Warning:> emitting floats is not reliable in the current ckdl release.
-Values with few significant digits (C<3.14>, C<0.5>, C<1e21>) are fine, but
-values that need many digits may be written with wrong or truncated digits.
-See L</"Emitting floating point numbers safely"> before writing floats you
-care about.
+way back in; C<< $v->as_number >> gives the double and C<< $v->as_bignum >>
+the exact decimal. See L</"Emitting floating point numbers"> for writing
+floats.
 
 =head2 Hexadecimal, octal and binary numbers
 
@@ -1009,12 +992,11 @@ care about.
     kind=integer  value=493
     kind=integer  value=10
     kind=integer  value=2147483647
-    kind=string   value=3735928559
+    kind=integer  value=3735928559
 
 Radix prefixes exist only in the source text; parsed values are ordinary
 numbers and C<emit_kdl> writes them in decimal
-(C<radix 255 493 10 2147483647 3735928559>). C<0xDEAD_BEEF> is a
-C<string> because of the 32-bit quirk described under L</Integers>.
+(C<radix 255 493 10 2147483647 3735928559>).
 Hexadecimal digits may be upper or lower case, but the prefix must be
 lower case: C<0XFF> is a syntax error. A sign may precede the prefix:
 C<-0x10> is C<-16>.
@@ -1036,7 +1018,7 @@ keeps the text:
 =for highlighter language=KDL
 
   huge 123456789012345678901234567890 1e400
-  extremes 9223372036854775807 9223372036854775808
+  extremes 18446744073709551615 18446744073709551616
 
 =for highlighter
 
@@ -1044,30 +1026,25 @@ keeps the text:
     kind=string   value=123456789012345678901234567890
     kind=string   value=1e400
   extremes
-    kind=integer  value=9223372036854775807
-    kind=string   value=9223372036854775808
+    kind=integer  value=18446744073709551615
+    kind=string   value=18446744073709551616
 
 The text is normalised (underscores removed, radix prefixes converted to
 decimal, a leading C<+> dropped), but otherwise verbatim, and is written
-back out unchanged by C<emit_kdl>. To compute with it:
+back out unchanged by C<emit_kdl>. To compute with it exactly, ask for a
+L<Math::BigInt> or L<Math::BigFloat>:
 
 =for highlighter language=Perl
 
-  use Math::BigInt;
-  use Math::BigFloat;
-
   my $v = parse_kdl($kdl)->nodes->[0]->args->[0];
-  if ($v->is_number && $v->kind eq 'string') {
-      my $exact = $v->value =~ /[.eE]/
-          ? Math::BigFloat->new($v->value)
-          : Math::BigInt->new($v->value);
-  }
+  my $exact = $v->as_bignum;    # Math::BigInt 123456789012345678901234567890
+  print $exact * 2;             # 246913578024691357802469135780
 
 =for highlighter
 
-C<< $v->as_number >> returns the text unchanged for these values. Doing
-arithmetic on it directly converts through a Perl double and silently loses
-precision, so check C<kind> first.
+C<< $v->as_number >> converts the text to a Perl number, which is fine
+for a quick comparison but loses precision (C<1.23456789012346e+29>), and
+C<1e400> becomes infinite.
 
 =head2 Keyword numbers: #inf, #-inf and #nan
 
@@ -1085,19 +1062,18 @@ KDL v2 spells the IEEE special values C<#inf>, C<#-inf> and C<#nan>:
     kind=float    value=NaN
 
 They come back as Perl's C<Inf>, C<-Inf> and C<NaN> and are written as
-C<#inf #-inf #nan> by C<emit_kdl>, even in v1 mode (v1 has no syntax for
-them, so a v1 document containing them is technically invalid).
+C<#inf #-inf #nan> by C<emit_kdl>. KDL v1 has no syntax for them, so
+C<< emit_kdl($doc, version => '1') >> dies with C<emit_kdl: KDL v1 has no
+representation for inf/nan> rather than writing an invalid document.
 
 =head2 Number kinds: integer, float, string
 
-Summary of C<< $value->kind >> for a C<number> value, as the underlying
-ckdl library classifies the source text:
+Summary of C<< $value->kind >> for a C<number> value:
 
   kind       value is                          when
   ---------  --------------------------------  ---------------------------------------
-  integer    Perl integer (IV)                 no . or exponent; fits in signed 64 bits;
-                                               magnitude not in 2**31 .. 2**32-1;
-                                               not -2**63
+  integer    Perl integer (IV, or UV above     no . or exponent; value within
+             2**63-1)                          -2**63 .. 2**64-1
   float      Perl floating point number (NV)   has . or exponent; at most 15 digits
                                                written before the exponent (zeros
                                                count); written exponent within
@@ -1277,18 +1253,19 @@ events.
 
 =for highlighter language=Perl
 
-  use Text::KDL::XS;   # also loads Text::KDL::XS::Parser
+  use Text::KDL::XS::Parser;
 
-  my $p = Text::KDL::XS::Parser->new($kdl, emit_comments => 1);
+  my $p = Text::KDL::XS::Parser->new("// note\n$kdl", emit_comments => 1);
   while (my $ev = $p->next_event) {
       printf "%-10s commented=%d %s\n", $ev->{event}, $ev->{commented},
-          $ev->{name} // '';
+          $ev->{name} // $ev->{text} // '';
   }
 
 =for highlighter
 
-For the first two nodes of the slashdash example above this prints:
+For a comment followed by the slashdash example above this prints:
 
+  comment    commented=1 // note
   start_node commented=1 disabled
   argument   commented=1
   start_node commented=1 child
@@ -1304,15 +1281,17 @@ For the first two nodes of the slashdash example above this prints:
   start_node commented=1 also-ignored
   end_node   commented=1
   end_node   commented=0
+  start_node commented=0 annotated
+  argument   commented=1
+  argument   commented=0
+  end_node   commented=0
 
-A C<comment> event carries no text and no position; it only shows, by its
-place in the event sequence, that a comment stood between the surrounding
-elements.
+A C<comment> event carries the comment as written in C<text>, delimiters
+included (C<// note>, C</* ... */>), but no position; its place in the
+event sequence shows where the comment stood.
 
-B<Do not pass C<emit_comments> to C<parse_kdl>:> its tree builder ignores
-the C<commented> flag, so every slashdashed node, argument, property and
-children block would be put back into the document as if it had never
-been commented out.
+C<parse_kdl> accepts C<emit_comments> as well, but comments and
+slashdashed elements never become part of the tree it builds.
 
 =head1 WHITESPACE, NEWLINES AND ENCODING
 
@@ -1324,9 +1303,9 @@ tokens. They carry no meaning and are not preserved:
 
 =for highlighter language=Perl
 
-  my $doc = parse_kdl("a\t1\x{c2}\x{a0}2   3\n");   # tab, no-break space, spaces
-  print scalar @{ $doc->nodes->[0]->args };         # 3
-  print emit_kdl($doc);                             # a 1 2 3
+  my $doc = parse_kdl("a\t1\x{a0}2   3\n");   # tab, no-break space, spaces
+  print scalar @{ $doc->nodes->[0]->args };   # 3
+  print emit_kdl($doc);                       # a 1 2 3
 
 =for highlighter
 
@@ -1354,10 +1333,13 @@ whitespace everywhere.
 
 =for highlighter language=Perl
 
-  my $doc = parse_kdl("\xef\xbb\xbfnode 1\n");   # the three bytes of the BOM
-  print $doc->nodes->[0]->name;                   # node
+  my $doc = parse_kdl("\x{feff}node 1\n");   # a string starting with the BOM character
+  print $doc->nodes->[0]->name;              # node
 
 =for highlighter
+
+The same holds for the three bytes C<EF BB BF> at the start of a file read
+through a filehandle.
 
 =head2 Disallowed characters
 
@@ -1368,7 +1350,7 @@ U+200F, U+202A to U+202E, U+2066 to U+2069), surrogates, and a BOM
 anywhere but at the start (in v2). The parser rejects them with a parse
 error in v2 and detection mode; with C<< version => '1' >> it accepts them
 inside strings and identifiers. Quoted strings can hold them through
-C<\u{...}> escapes (surrogates only outside v2, see
+C<\u{...}> escapes (except surrogates, which are never allowed, see
 L</"Escape sequences">); raw strings cannot.
 
 =for highlighter language=KDL
@@ -1383,23 +1365,31 @@ error.
 
 =head2 UTF-8 and Perl strings
 
-KDL documents are UTF-8. C<parse_kdl> and L<Text::KDL::XS::Parser> expect
-their input as UTF-8 B<bytes>, and return Perl B<character> strings (with
-the UTF-8 flag set, so C<length> counts characters). C<emit_kdl> takes
-character strings and returns a character string, which you encode when
-writing to a file or socket, and which C<print> mangles unless the output
-handle has an encoding layer.
+KDL documents are UTF-8. C<parse_kdl> and L<Text::KDL::XS::Parser> take
+a string as Perl B<characters>, read filehandles and code references as
+UTF-8 B<bytes> (characters from an encoding layer or a code reference are
+encoded for you), and return Perl B<character> strings (with the UTF-8
+flag set, so C<length> counts characters). C<emit_kdl> takes character
+strings and returns a character string, which you encode when writing to
+a file or socket, and which C<print> mangles unless the output handle has
+an encoding layer. So C<parse_kdl(emit_kdl($data))> always works.
 
 =for highlighter language=Perl
 
+  use utf8;                                  # string literals in this file are characters
   use Encode qw(encode decode);
   binmode STDOUT, ':encoding(UTF-8)';
 
-  # Reading: give the parser bytes.
-  open my $in, '<:raw', 'config.kdl' or die $!;
-  my $doc = parse_kdl(do { local $/; <$in> });
+  # Reading: pass the filehandle, any layer works ...
+  open my $in, '<', 'config.kdl' or die $!;
+  my $doc = parse_kdl($in);
   my $name = $doc->nodes->[0]->name;         # a character string, e.g. "café"
   print length $name;                        # 4
+
+  # ... or pass a character string.
+  my $inline = parse_kdl("café 1\n");         # a literal under use utf8
+  my $bytes  = do { open my $raw, '<:raw', 'config.kdl' or die $!; local $/; <$raw> };
+  my $again  = parse_kdl(decode('UTF-8', $bytes));   # bytes must be decoded first
 
   # Writing: encode the emitted characters.
   open my $out, '>:raw', 'config.kdl' or die $!;
@@ -1411,23 +1401,18 @@ handle has an encoding layer.
 
 =for highlighter
 
-Two situations need care in this release:
+The one thing to watch is a string of UTF-8 B<bytes> (a heredoc in a
+source file without C<use utf8>, or data slurped through C<:raw>): it has
+to be decoded before C<parse_kdl> sees it, otherwise every byte counts as
+one character and C<café> comes back as five characters instead of four.
+Text::KDL::XS 0.001
+expected exactly such byte strings; code written for it must decode now.
 
-=over 4
-
-=item * A Perl character string that contains non-ASCII characters (for
-example a literal under C<use utf8>, or text decoded from a database) is
-not accepted by C<parse_kdl> directly. Encode it first:
-C<< parse_kdl(encode('UTF-8', $text)) >>. Byte strings that are already
-UTF-8 (a heredoc in a source file without C<use utf8>, or data read with
-C<:raw>) work as they are.
-
-=item * Filehandles passed to C<parse_kdl> must deliver raw bytes and must
-be backed by a real file descriptor. Do not add an C<:encoding(...)> or
-C<:utf8> layer, and do not use in-memory handles (C<< open my $fh, '<', \$string >>);
-pass the string itself instead. See L<Text::KDL::XS/"FILEHANDLE SOURCES">.
-
-=back
+Input that is not valid UTF-8 (including overlong forms, surrogates and
+code points above U+10FFFF) is a parse error, C<KDL parse error: input is
+not valid UTF-8>. On output, C<emit_kdl> dies for a name, key or string
+that contains a surrogate or a code point above U+10FFFF, which no KDL
+document can hold.
 
 =head1 KDL VERSIONS
 
@@ -1585,7 +1570,7 @@ becomes a node; data mode never writes properties.
   { key => [ $s, {..} ] }       key <s>  key { ... }   (mixed: one sibling per element)
   { key => [ [1,2], [3] ] }     key 1 2  key 3         (inner arrays: one sibling each)
   [ $a, $b ]  (top level)       - <a>  - <b>           (nodes named "-")
-  {} or []    (top level)       (empty string)
+  {} or []    (top level)       (a single newline)
   boolean object                #true / #false
   Text::KDL::XS::Value          emitted with its type, kind and annotation
 
@@ -1633,9 +1618,12 @@ Hash keys are sorted so output is deterministic.
 =for highlighter
 
 Note C<number "42">: the Perl string C<'42'> is emitted as a string, and the
-Perl number C<42> as a number. The distinction is made from the scalar's
-internal flags, so a value that has been used in numeric context becomes a
-number. Wrap in C<"$x"> or C<0 + $x> when it matters.
+Perl number C<42> as a number. A string that has been used as a number
+counts as a number only when its text is exactly how Perl prints that
+number (C<'42'> does, C<'042'> and C<'4.20'> do not), so no text is ever
+altered; see L<Text::KDL::XS/"Scalar coercion">. Wrap in C<"$x"> or
+C<0 + $x> when it matters. A hash or array that contains itself makes
+C<emit_kdl> die (C<emit_kdl: cyclic data structure>).
 
 A top-level array produces anonymous nodes named C<->, the convention used
 by KDL's JSON mapping:
@@ -1678,9 +1666,9 @@ property order, type annotations, number kinds.
 =for highlighter
 
 An array reference is treated as tree mode only when every element is a
-L<Text::KDL::XS::Node>; an array that mixes nodes with other values dies
-(C<cannot serialize Text::KDL::XS::Node ref>), and an empty array
-reference emits an empty string.
+L<Text::KDL::XS::Node> (or a subclass); an array that mixes nodes with
+other values dies (C<emit_kdl: cannot serialize Text::KDL::XS::Node
+object>), and an empty array reference emits a single newline.
 
 =head2 What a round trip loses
 
@@ -1702,8 +1690,8 @@ single-line strings, identifier strings stay bare only if the emitter
 considers that safe;
 
 =item * the spelling of numbers: C<0xFF> becomes C<255>, C<1_000> becomes
-C<1000>, C<1e3> becomes C<1000.0>, C<+3> becomes C<3>, C<-0.0> becomes
-C<0.0>;
+C<1000>, C<1e3> becomes C<1000.0>, C<6.02e23> becomes C<6.02e+23>, C<+3>
+becomes C<3>;
 
 =item * empty children blocks (C<node {}> becomes C<node>);
 
@@ -1711,9 +1699,8 @@ C<0.0>;
 
 =back
 
-Floats with many significant digits may also come back changed because of
-the emitter defect described in
-L</"Emitting floating point numbers safely">.
+The value of every float is kept exactly: it is written with the shortest
+text that reads back as the same double.
 
 =head2 Building nodes and values by hand
 
@@ -1722,7 +1709,7 @@ L</"Emitting floating point numbers safely">.
   use Text::KDL::XS qw(emit_kdl);   # also loads Document, Node and Value
 
   my $str = sub { Text::KDL::XS::Value->new(type => 'string', value => shift) };
-  my $int = sub { Text::KDL::XS::Value->new(type => 'number', kind => 'integer', value => shift) };
+  my $int = sub { Text::KDL::XS::Value->new(type => 'number', value => shift) };
 
   my $version = Text::KDL::XS::Node->new(name => 'version', args => [ $str->('1.0') ]);
   my $package = Text::KDL::XS::Node->new(
@@ -1744,16 +1731,17 @@ L</"Emitting floating point numbers safely">.
 
 =for highlighter
 
+The number C<Value> above gets its C<kind> (C<integer>) from the Perl
+value; pass C<< kind => 'string' >> to write a number with exactly the
+digits you give. The constructors check their arguments, so a mistake such
+as C<< type => 'Number' >> or a non-numeric number dies where the object
+is made, not later in C<emit_kdl>.
+
 Plain scalars are also accepted inside C<args> and C<props> of a hand-built
 node and are coerced like data-mode values:
 C<< Text::KDL::XS::Node->new(name => 'n', args => [ 1, 'two', undef ]) >>
-emits C<n 1 two #null>. Always give a number C<Value> a C<kind>; without
-one the value is written verbatim and a warning is emitted.
-
-One caveat: C<prop($key)> works through an index that the parser builds.
-A node created with C<new> has no index, so C<prop> returns C<undef> for
-it; iterate C<props> instead. The same index goes stale when you modify
-C<props> of a parsed node, see L</"Modify a document and write it back">.
+emits C<n 1 two #null>. C<< $node->prop($key) >> works on hand-built nodes
+as well; it searches C<props>, the rightmost occurrence of a key winning.
 
 =head2 Emitting booleans
 
@@ -1767,18 +1755,22 @@ be true):
 =for highlighter language=Perl
 
   use JSON::PP ();
-  print emit_kdl({ enabled => JSON::PP::true(), verbose => JSON::PP::false(), literally => 'true' });
+  print emit_kdl({ enabled => JSON::PP::true(), verbose => JSON::PP::false() });
   # enabled #true
-  # literally true
   # verbose #false
 
   my $yes = Text::KDL::XS::Value->new(type => 'bool', value => 1);
   print emit_kdl({ flag => $yes });   # flag #true
 
+  print emit_kdl({ enabled => JSON::PP::true(), literally => 'true' });
+  # "enabled" #true
+  # "literally" "true"
+
 =for highlighter
 
-Note that the string C<'true'> was written bare as C<true>, which a KDL v2
-parser rejects; see L</"Emitting strings that look like keywords or numbers">.
+The string C<'true'> stays a string. Written bare it would read back as a
+boolean, so C<emit_kdl> quotes it, and with it every identifier of the
+document; see L</"Emitting strings that look like keywords or numbers">.
 
 =head2 Emitting type annotations
 
@@ -1799,75 +1791,68 @@ works in data mode and tree mode:
 Node type annotations are set with C<type_annotation> in
 L<Text::KDL::XS::Node/new>.
 
-=head2 Emitting floating point numbers safely
+=head2 Emitting floating point numbers
 
-The ckdl library that does the actual formatting has a defect in its float
-printer: for many values it produces too few digits or the wrong digits.
-Perl integers are unaffected; floating point values are, including
-integral ones. Examples from the current release:
-
-=for highlighter language=Perl
-
-  print emit_kdl({ n => 0.1 + 0.2 });          # n 0.3                    (should be 0.30000000000000004)
-  print emit_kdl({ n => 123456789.0 });        # n 1.2345679e8            (re-parses as 123456790)
-  print emit_kdl({ n => 1908124443056.387 });  # n 1.098124443056387e12   (1908 became 1098)
-  print emit_kdl({ n => 123456789 });          # n 123456789              (an integer: correct)
-
-=for highlighter
-
-Until this is fixed upstream, format floats yourself and hand them over as
-a string-encoded number, which is copied verbatim. The shortest text that
-reads back as the same double is found by trying increasing precisions:
+Floats are written with the shortest text that reads back as exactly the
+same double, and always with a decimal point or an exponent, so that they
+stay floats when parsed again. Perl integers are written as integers:
 
 =for highlighter language=Perl
 
-  sub kdl_float {
-      my ($f) = @_;
-      my $text;
-      for my $digits (15 .. 17) {
-          $text = sprintf '%.*g', $digits, $f;
-          last if $text == $f;
-      }
-      $text .= '.0' if $text =~ /^-?\d+$/;   # keep it a float on re-parse
-  die "not finite: $f" if $text =~ /inf|nan/i;   # would re-parse as a string
-      return Text::KDL::XS::Value->new(type => 'number', kind => 'string', value => $text);
-  }
-  print emit_kdl({ a => kdl_float(0.1 + 0.2), b => kdl_float(3.14), c => kdl_float(123456789.0) });
-  # a 0.30000000000000004
-  # b 3.14
-  # c 123456789.0
+  print emit_kdl({ n => 0.1 + 0.2 });          # n 0.30000000000000004
+  print emit_kdl({ n => 123456789.0 });        # n 123456789.0
+  print emit_kdl({ n => 1908124443056.387 });  # n 1908124443056.387
+  print emit_kdl({ n => 1e21 });               # n 1e+21
+  print emit_kdl({ n => -0.0 });               # n -0.0
+  print emit_kdl({ n => 123456789 });          # n 123456789   (an integer)
 
 =for highlighter
 
-Note that a value with 16 or more significant digits comes back from
-C<parse_kdl> as C<< kind => 'string' >> (see
-L</"Floating point numbers">); its text is exact, so C<< $v->as_number + 0 >>
-restores the double.
+Infinity and NaN are written as C<#inf>, C<#-inf> and C<#nan> in KDL v2
+and make C<emit_kdl> die in KDL v1, which cannot express them.
+
+To write a number with exactly the digits you choose, for example a price
+with trailing zeros or a decimal with more precision than a double, hand
+it over as a string-encoded number, which is checked for KDL number syntax
+and copied verbatim:
+
+=for highlighter language=Perl
+
+  my $price = Text::KDL::XS::Value->new(type => 'number', kind => 'string', value => '1.50');
+  print emit_kdl({ price => $price });         # price 1.50
+
+=for highlighter
+
+A value with 16 or more significant digits comes back from C<parse_kdl>
+as C<< kind => 'string' >> (see L</"Floating point numbers">); its text is
+exact, C<< $v->as_number >> gives the double and C<< $v->as_bignum >> the
+exact decimal.
 
 =head2 Emitting strings that look like keywords or numbers
 
-The emitter writes node names and property keys bare whenever the
-characters allow it, and in KDL v2 output does the same for string values.
-It does not check for the reserved words C<true>, C<false>, C<null>,
-C<inf>, C<-inf>, C<nan> or for number-like text such as C<-1>, C<+1> or
-C<.5>. Such output does not parse back correctly:
+The emitter writes node names, property keys and type annotations bare
+whenever the characters allow it, and in KDL v2 output does the same for
+string values. Written bare, the reserved words C<true>, C<false>, C<null>
+(and in v2 C<inf>, C<-inf>, C<nan>) and number-like text such as C<-1>,
+C<+1> or C<.5> would read back as keywords or numbers, or not at all. When
+a document contains such a string, C<emit_kdl> therefore writes it with
+every identifier quoted (C<< identifier_mode => 1 >>):
 
 =for highlighter language=Perl
 
-  print emit_kdl({ answer => 'true' });                 # answer true    -> re-parses as a boolean (v1), syntax error in v2
-  print emit_kdl({ n => '-1' });                        # n -1           -> re-parses as the number -1
-  print emit_kdl({ true => 6 }, version => '1');        # true 6         -> syntax error in v1 as well
+  print emit_kdl({ answer => 'yes' });                  # answer yes
+  print emit_kdl({ answer => 'true' });                 # "answer" "true"
+  print emit_kdl({ n => '-1' });                        # "n" "-1"
+  print emit_kdl({ true => 6 }, version => '1');        # "true" 6
 
 =for highlighter
 
-If your strings, names or keys can contain such values, quote everything
-with C<< identifier_mode => 1 >>:
-
-=for highlighter language=Perl
-
-  print emit_kdl({ answer => 'true' }, identifier_mode => 1);   # "answer" "true"
-
-=for highlighter
+The underlying ckdl library decides quoting from the characters alone,
+which is why the whole document is switched rather than the one string.
+If you pass C<identifier_mode> yourself, it is used as given: with mode 0
+or 2 such strings are written bare and the output does not round-trip
+(C<< emit_kdl({ answer => 'true' }, identifier_mode => 0) >> gives
+C<answer true>).
 
 =head2 Indentation
 
@@ -1906,17 +1891,21 @@ as escape sequences. It is a bit mask; the useful values are:
 
 The flags C<0x10>, C<0x20> and C<0x40> may be combined with bitwise or;
 C<0x100> only has an effect together with all of C<0x70>, and C<0x170> is
-the preset for ASCII-only output. B<Without C<0x20>, strings containing newlines are written with a
-literal newline inside the quotes, which is not valid KDL v2.>
+the preset for ASCII-only output. KDL v2 does not allow a literal newline
+inside a quoted string, so v2 output always escapes newlines, whatever
+C<escape_mode> says; in v1 output a mode without C<0x20> writes the
+newline literally.
 
 C<identifier_mode> controls quoting of node names, property keys, type
 annotations and (in v2) string values:
 
   identifier_mode   Effect
   ---------------   ---------------------------------------------------
-  0                 the default: bare when the characters allow it
+  0                 bare when the characters allow it
   1                 quote every identifier and every string
   2                 bare only if pure ASCII, otherwise quoted
+  (not given)       mode 0, or mode 1 when some string would not
+                    read back as written (see above)
 
 Given the document
 
@@ -1978,8 +1967,8 @@ to the shape of your configuration.
       return \%h;
   }
 
-  open my $fh, '<:raw', 'database.kdl' or die "database.kdl: $!";
-  my $doc    = parse_kdl(do { local $/; <$fh> });
+  open my $fh, '<', 'database.kdl' or die "database.kdl: $!";
+  my $doc    = parse_kdl($fh);
   my $config = node_to_hash($doc->nodes->[0]);
 
 =for highlighter
@@ -2030,13 +2019,12 @@ Nodes and values are plain blessed hashes; edit them in place and emit.
 
 =for highlighter
 
-Changing the C<value> inside an existing property, as above, is safe.
-Adding, removing or reordering entries of C<< $node->props >> is not
-reflected in C<< $node->prop >>, which uses an index built at parse time:
-after C<< push @{ $node->props }, [ a => $v ] >> the call C<< prop('a') >>
-still returns the old value, and after a C<shift> every lookup is off by
-one. When you restructure C<props>, read them back by iterating the array
-rather than through C<prop>.
+Changing the C<value> inside an existing property, as above, is fine as
+long as it still fits the value's type and kind (C<emit_kdl> checks it
+again). Adding, removing or reordering entries of C<< $node->props >> is
+fine too: C<< $node->prop >> searches the array each time, so after
+C<< push @{ $node->props }, [ port => $v ] >> the call C<< prop('port') >>
+returns the new value.
 
 Comments and formatting of the original are not preserved; the output is
 re-generated from the tree (see L</"What a round trip loses">).
@@ -2080,11 +2068,11 @@ L<Text::KDL::XS::Parser> yields one event at a time and never builds the
 document tree. With a filehandle or code reference source it reads the
 input in chunks, so memory use depends on the nesting depth and the size
 of the current event, not on the length of the document (a string source
-is copied once in full). Give it an unread, raw filehandle:
+is copied once in full). Give it a filehandle:
 
 =for highlighter language=Perl
 
-  use Text::KDL::XS;   # also loads Text::KDL::XS::Parser
+  use Text::KDL::XS::Parser;
 
   open my $fh, '<:raw', 'huge.kdl' or die $!;
   my $p = Text::KDL::XS::Parser->new($fh);
@@ -2108,47 +2096,63 @@ L<Text::KDL::XS::Parser/"EVENT HASH">.
 
 =head2 Read from STDIN, a socket or a pipe
 
-Any glob reference with a real file descriptor works, as long as it has no
-encoding layer and nothing has been read from it with buffered I/O yet:
+Any filehandle works, with or without an encoding layer, even after some
+lines have been read from it:
 
 =for highlighter language=Perl
 
-  binmode STDIN;
-  my $doc = parse_kdl(\*STDIN);   # a reference; a bare *STDIN would be parsed as text
+  my $doc = parse_kdl(\*STDIN);   # or parse_kdl(*STDIN)
+
+=for highlighter
+
+Filehandles are read with Perl's C<read>, which waits until it has a full
+chunk (a few kilobytes) or the input ends. That is ideal for files; on a
+slow pipe or socket it means the first events can arrive later than the
+data they describe. For low latency with L<Text::KDL::XS::Parser>, read
+with C<sysread> in a code reference, which returns whatever has arrived:
+
+=for highlighter language=Perl
+
+  binmode STDIN;   # sysread needs a handle without an encoding layer
+  my $parser = Text::KDL::XS::Parser->new(sub {
+      my ($wanted_bytes) = @_;
+      my $count = sysread STDIN, my $chunk, $wanted_bytes;
+      die "cannot read STDIN: $!" unless defined $count;
+      return $chunk;                                  # '' at end of input
+  });
 
 =for highlighter
 
 If the data arrives in chunks from somewhere else (an HTTP body, a
-decompressor), use a code reference. It is called with the number of bytes
-the parser can accept and must return a byte string of B<at most that
-length>; bytes beyond it are discarded without an error, which silently
-drops nodes. Return an empty string or C<undef> at end of input:
+decompressor), use a code reference as well. It is called with the number
+of bytes the parser would like; that is only a hint, a chunk of any length
+is accepted. Return an empty string or C<undef> at end of input; after
+that the code reference is not called again:
 
 =for highlighter language=Perl
 
-  my $buffer = join '', map { "n$_ 1\n" } 1 .. 2000;   # any amount of pending data
-  my $doc = parse_kdl(sub {
-      my ($wanted_bytes) = @_;
-      return substr $buffer, 0, $wanted_bytes, '';     # hand over at most $wanted_bytes
-  });
+  my @pending = (join('', map { "n$_ 1\n" } 1 .. 2000), '');   # one big chunk, then the end
+  my $doc = parse_kdl(sub { shift @pending });
   print scalar @{ $doc->nodes };   # 2000
 
 =for highlighter
 
-Chunk boundaries do not need to align with lines or tokens. Exceptions
-thrown inside the callback are swallowed and treated as end of input, so
-check for errors yourself before returning.
+Chunks are UTF-8 bytes (a character string is encoded for you), and their
+boundaries do not need to align with lines, tokens or even characters. An
+exception thrown inside the code reference propagates out of C<parse_kdl>
+(or C<next_event>) unchanged, so a C<die> with an error object arrives as
+that object.
 
 =head2 Handle parse errors
 
-C<parse_kdl> and C<next_event> die on malformed input. The exact message
-is
+C<parse_kdl> and C<next_event> die on malformed input with the reason
+given by the underlying library, reported at the line of your call:
 
-  KDL parse error at .../Text/KDL/XS/Parser.pm line 39.
+  KDL parse error: Unexpected end of data (unclosed lists of children) at load.pl line 12.
 
 (Perl appends C<< , <$fh> line N. >> if a filehandle was read with
-C<< <> >> earlier in the program.) It carries no line number of the input; the underlying library provides none,
-and its reason text is not passed through in this release.
+C<< <> >> earlier in the program.) The message carries no line number of
+the input; the underlying library does not track positions.
 
 =for highlighter language=Perl
 
@@ -2160,11 +2164,14 @@ and its reason text is not passed through in this release.
 
 =for highlighter
 
-C<emit_kdl> dies for values it cannot serialise (code references, globs,
-unknown C<version> values):
+A streaming parser that has failed stays failed: every further
+C<next_event> dies with the same error. C<emit_kdl> dies for values it
+cannot serialise and for bad options, again at your line:
 
-  emit_kdl: cannot serialize CODE ref
-  emit_kdl: unknown version 'v2'
+  emit_kdl: cannot serialize CODE ref at save.pl line 7.
+  emit_kdl: unknown version 'v3' (expected 'detect', '1' or '2') at save.pl line 9.
+
+L<Text::KDL::XS/ERRORS> lists every message.
 
 =head2 Validate against an expected structure
 
@@ -2187,24 +2194,24 @@ usually suffice:
 
 =head2 Parse untrusted input
 
-The parser itself is bounded by the size of the input, but nothing limits
-nesting depth: a document with tens of thousands of nested children blocks
-parses, and walking, emitting or C<as_data>-ing the resulting tree then
-recurses that deep ("Deep recursion" warnings, and for C<emit_kdl> an
-indentation of the same size per line). When input comes from outside,
-check the depth with the streaming parser before building a tree:
+The parser is bounded by the size of the input, and nesting is bounded by
+the C<max_depth> option: by default a document nested more than 512
+levels deep dies with C<KDL parse error: nesting depth exceeds max_depth
+(512)> before the tree gets any deeper. That keeps walking, emitting or
+C<as_data>-ing the tree cheap. Lower the limit to what your format needs:
 
 =for highlighter language=Perl
 
-  my $p = Text::KDL::XS::Parser->new($bytes);
-  my ($depth, $max) = (0, 0);
-  while (my $ev = $p->next_event) {
-      $depth++ if $ev->{event} eq 'start_node';
-      $depth-- if $ev->{event} eq 'end_node';
-      die "too deeply nested" if $depth > 64;
-  }
+  my $doc = eval { parse_kdl($untrusted, max_depth => 16) }
+      or die "rejected: $@";
 
 =for highlighter
+
+Everything else is checked as well: the input must be valid UTF-8, and
+the parser rejects every document that is not valid KDL. What remains
+your job is the size of the input (read at most as many bytes as you are
+willing to hold) and the meaning of the data (see
+L</"Validate against an expected structure">).
 
 =head1 SEE ALSO
 

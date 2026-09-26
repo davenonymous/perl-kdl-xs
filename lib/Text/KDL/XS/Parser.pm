@@ -3,84 +3,105 @@ package Text::KDL::XS::Parser;
 use strict;
 use warnings;
 
-use Scalar::Util ();
 use Carp ();
+use Scalar::Util ();
+use Text::KDL::XS ();
 
-# Constructor:
-#   Text::KDL::XS::Parser->new($source, %opts)
-#     $source : string | filehandle | coderef returning chunks
-#     %opts   : version       => 'detect'|'1'|'2'   (default: detect)
-#               emit_comments => 0|1                (default: 0)
+our @CARP_NOT = qw(
+    Text::KDL::XS Text::KDL::XS::Document Text::KDL::XS::Emitter
+    Text::KDL::XS::Node Text::KDL::XS::Value
+);
+
+my $DEFAULT_MAX_DEPTH = 512;
+my $LARGEST_MAX_DEPTH = ~0 >> 1;
+my %IS_OPTION         = map { $_ => 1 } qw(version emit_comments max_depth);
+
 sub new {
-    my ($class, $source, %opts) = @_;
+    my ($class, $source, @options) = @_;
 
-    Carp::croak("Text::KDL::XS::Parser: source is required")
-        unless defined $source;
+    Carp::croak(__PACKAGE__ . ": source is required") unless defined $source;
+    my $options   = Text::KDL::XS::_parse_named_arguments(__PACKAGE__, 'option', \%IS_OPTION, @options);
+    my $flags     = _option_flags($options);
+    my $max_depth = _max_depth($options->{max_depth});
+    my $reader    = _is_text_source($source) ? undef : _reader_for($source);
 
-    my $opts_int = _build_opt_flags(\%opts);
-
-    if (my $reftype = ref $source) {
-        return $class->_new_stream_parser($source, $opts_int)
-            if $reftype eq 'CODE';
-
-        my $reader = _make_io_reader($source);
-        return $class->_new_stream_parser($reader, $opts_int)
-            if $reader;
-
-        Carp::croak("Text::KDL::XS::Parser: unsupported source ref type '$reftype'");
-    }
-
-    return $class->_new_string_parser($source, $opts_int);
+    my $parser;
+    eval {
+        $parser = $reader
+            ? $class->_new_stream_parser($reader, $flags, $max_depth)
+            : $class->_new_string_parser($source, $flags, $max_depth);
+        1;
+    } or Text::KDL::XS::_rethrow($@, __FILE__);
+    return $parser;
 }
 
-# Returns the next event hashref, or undef at EOF. Dies on parse error.
 sub next_event {
     my ($self) = @_;
-    return $self->_next_event;
+    my $event;
+    eval { $event = $self->_next_event; 1 } or Text::KDL::XS::_rethrow($@, __FILE__);
+    return $event;
 }
 
-# --- internals -------------------------------------------------------------
-
-sub _build_opt_flags {
-    my ($opts) = @_;
-
-    my $version = lc($opts->{version} // 'detect');
+sub _option_flags {
+    my ($options) = @_;
+    my $version = Text::KDL::XS::_normalize_version(__PACKAGE__, $options->{version});
     my $flags
-        = $version eq 'detect' ? Text::KDL::XS::_OPT_DETECT()
-        : $version eq '1'      ? Text::KDL::XS::_OPT_V1()
-        : $version eq '2'      ? Text::KDL::XS::_OPT_V2()
-        : Carp::croak("unknown version '$version' (expected 'detect', '1', or '2')");
-
-    $flags |= Text::KDL::XS::_OPT_EMIT_COMMENTS() if $opts->{emit_comments};
+        = $version eq '1' ? Text::KDL::XS::_OPT_V1()
+        : $version eq '2' ? Text::KDL::XS::_OPT_V2()
+        :                   Text::KDL::XS::_OPT_DETECT();
+    $flags |= Text::KDL::XS::_OPT_EMIT_COMMENTS() if $options->{emit_comments};
     return $flags;
 }
 
-# Wrap a filehandle / IO object as a Perl sub the XS layer can call.
-sub _make_io_reader {
+sub _max_depth {
+    my ($max_depth) = @_;
+    return $DEFAULT_MAX_DEPTH unless defined $max_depth;
+    Carp::croak(__PACKAGE__ . ": max_depth must be a non-negative integer, got '$max_depth'")
+        unless $max_depth =~ /\A[0-9]+\z/ && $max_depth <= $LARGEST_MAX_DEPTH;
+    return $max_depth;
+}
+
+# A plain string, as opposed to a reference or a bare glob such as *STDIN.
+sub _is_text_source {
     my ($source) = @_;
+    return !ref $source && ref \$source ne 'GLOB';
+}
 
+# The code reference that delivers the chunks of a callback, filehandle or IO
+# object source to the XS layer.
+sub _reader_for {
+    my ($source) = @_;
     my $reftype = Scalar::Util::reftype($source) // '';
-    return undef unless $reftype eq 'GLOB' || Scalar::Util::blessed($source);
 
-    # Duck-type: must support sysread or read.
-    my $can_sysread = $reftype eq 'GLOB' || (Scalar::Util::blessed($source)
-        && ($source->can('sysread') || $source->can('read')));
-    return undef unless $can_sysread;
+    return $source if $reftype eq 'CODE';
+    return _reader_for_handle($source) if Scalar::Util::openhandle($source);
+    Carp::croak(__PACKAGE__ . ": filehandle is not open")
+        if $reftype eq 'GLOB' || $reftype eq 'IO' || ref \$source eq 'GLOB';
+    return _reader_for_object($source)
+        if Scalar::Util::blessed($source) && ($source->can('read') || $source->can('sysread'));
+    Carp::croak(__PACKAGE__ . ": unsupported source ref type '" . ref($source) . "'");
+}
 
+# Reads an open filehandle with the PerlIO-aware read, so that layers such as
+# :encoding(UTF-8), data buffered by earlier reads and in-memory handles work.
+sub _reader_for_handle {
+    my ($handle) = @_;
     return sub {
-        my ($want) = @_;
-        my $buf = '';
-        my $n;
-        if ($reftype eq 'GLOB') {
-            $n = sysread($source, $buf, $want);
-        }
-        elsif ($source->can('sysread')) {
-            $n = $source->sysread($buf, $want);
-        }
-        else {
-            $n = $source->read($buf, $want);
-        }
-        return defined $n && $n > 0 ? $buf : '';
+        my ($wanted_bytes) = @_;
+        my $count = read($handle, my $chunk, $wanted_bytes);
+        Carp::croak(__PACKAGE__ . ": read failed: $!") unless defined $count;
+        return $chunk;
+    };
+}
+
+sub _reader_for_object {
+    my ($object) = @_;
+    my $read = $object->can('read') || $object->can('sysread');
+    return sub {
+        my ($wanted_bytes) = @_;
+        my $count = $object->$read(my $chunk, $wanted_bytes);
+        Carp::croak(__PACKAGE__ . ": read failed: $!") unless defined $count;
+        return $chunk;
     };
 }
 
@@ -98,7 +119,7 @@ Text::KDL::XS::Parser - Streaming, event-based KDL parser
 
 =for highlighter language=Perl
 
-  use Text::KDL::XS;   # also loads Text::KDL::XS::Parser
+  use Text::KDL::XS::Parser;
 
   open my $fh, '<:raw', 'big.kdl' or die $!;
   my $parser = Text::KDL::XS::Parser->new($fh, version => 'detect');
@@ -148,35 +169,42 @@ Creates a parser over C<$source>, which must be one of the following.
 
 =item String
 
-The whole document as UTF-8 bytes. The parser keeps a copy, so the caller
-may discard or modify the original afterwards.
+The whole document as a Perl character string (decode UTF-8 bytes first,
+see L<Text::KDL::XS/ENCODING>). The parser keeps a copy, so the caller may
+discard or modify the original afterwards.
 
 =item Filehandle or IO object
 
-A glob reference (C<\*STDIN>, not the bare C<*STDIN>) or an object that
-implements C<sysread> (preferred) or C<read>. A glob is read with Perl's
-C<sysread>, an object with its C<sysread> method or, failing that, its
-C<read> method, in chunks whose size ckdl chooses. It must be a raw handle
-backed by a real file descriptor: no C<:encoding(...)> or C<:utf8> layer,
-no in-memory handle, and no prior buffered reads on it. See
+A glob (C<*STDIN>), a glob reference (C<\*STDIN>, C<$fh>), an IO object
+(C<*STDIN{IO}>, L<IO::Handle>, L<IO::File>), a tied handle, or an object
+with a C<read> or C<sysread> method. Open handles are read with Perl's
+C<read> in chunks whose size ckdl chooses, so every PerlIO layer, data
+buffered by earlier reads and in-memory handles work; other objects are
+read through their C<read> method (preferred) or C<sysread> method. See
 L<Text::KDL::XS/"FILEHANDLE SOURCES">.
 
 =item Code reference
 
 Called as C<< $code->($wanted_bytes) >> whenever the parser needs more
-input. Return a byte string with the next chunk, or an empty string or
-C<undef> at end of input. The chunk must be at most C<$wanted_bytes> long
-(at most 4096, varying per call): anything beyond that is discarded
-without an error and
-nodes silently disappear. Chunk boundaries need not align with lines or
-tokens. An exception thrown inside the callback is swallowed and treated
-as end of input.
+input. Return the next chunk of UTF-8 bytes (a character string is
+encoded to UTF-8), or an empty string or C<undef> at the end of the
+input; the code reference is not called again after that.
+C<$wanted_bytes> is a hint: longer chunks are kept and handed over in
+pieces, and chunk boundaries need not align with lines, tokens or
+characters. An exception thrown inside the code reference propagates
+unchanged out of the C<new> or C<next_event> call that needed the input,
+and the parser is failed from then on (see L</next_event>).
 
 =back
 
+The source is read once before C<new> returns: ckdl reads ahead to look
+for a byte order mark, so a code reference is called for the first time,
+and a read error or exception can occur, inside C<new>.
+
 C<undef> dies with C<Text::KDL::XS::Parser: source is required>; any other
 reference type dies with C<Text::KDL::XS::Parser: unsupported source ref
-type '...'>.
+type '...'>, and a closed filehandle with C<Text::KDL::XS::Parser:
+filehandle is not open>.
 
 Options:
 
@@ -184,8 +212,8 @@ Options:
 
 =item version => 'detect' | '1' | '2'
 
-Which KDL version to accept; case-insensitive; default C<'detect'>. See
-L<Text::KDL::XS/"KDL VERSIONS">.
+Which KDL version to accept; also C<'v1'> and C<'v2'>, in any letter
+case; default C<'detect'>. See L<Text::KDL::XS/"KDL VERSIONS">.
 
 =item emit_comments => 0 | 1
 
@@ -193,7 +221,20 @@ When true, comments produce C<comment> events, and nodes, arguments and
 properties that were commented out with a slashdash (C</->) are reported
 with C<< commented => 1 >> instead of being dropped. Default false.
 
+=item max_depth => $levels
+
+The deepest nesting of nodes allowed (a top-level node is at depth 1);
+default 512, C<0> for unlimited. The event that would go deeper dies with
+C<KDL parse error: nesting depth exceeds max_depth (512)>.
+
 =back
+
+Unknown options, an odd number of option arguments and invalid values
+die. An option whose value is C<undef> is treated as not given.
+
+C<new> may be called on a subclass, and the parser is then an object of
+that class. A parser cannot be used in a thread other than the one that
+created it (see L<Text::KDL::XS/THREADS>).
 
 =head1 METHODS
 
@@ -207,8 +248,18 @@ with C<< commented => 1 >> instead of being dropped. Default false.
 
 Returns the next event as a hash reference, or C<undef> once the document
 has been consumed. Calling it again after C<undef> keeps returning
-C<undef>. Dies with C<KDL parse error> on malformed input; after an error
-every further call dies again.
+C<undef> without reading from the source.
+
+On malformed input it dies with C<KDL parse error: REASON>, where
+C<REASON> is ckdl's explanation (for example C<Unexpected end of data
+(unclosed lists of children)>); an exception thrown by a source code
+reference is passed through unchanged. After an error the parser is
+finished: every further call dies with the same error. Errors are
+reported at the line of your call.
+
+C<next_event> must not be called from inside the parser's own source code
+reference; that dies with C<Text::KDL::XS::Parser: next_event called from
+inside the parser's own source callback>.
 
 =head1 EVENT HASH
 
@@ -223,6 +274,7 @@ Each event is a hash reference with these keys:
   name       start_node, property         node name / property key (character string)
   type       start_node, when annotated   the node's type annotation
   value      argument, property           a Text::KDL::XS::Value
+  text       comment                      the comment, delimiters included
 
 Notes:
 
@@ -233,9 +285,10 @@ C<< emit_comments => 1 >>; without that option slashdashed elements are
 not reported at all. A slashdashed node reports all of its arguments,
 properties, children and its C<end_node> with C<< commented => 1 >>.
 
-=item * C<comment> events (only with C<emit_comments>) mark the position of
-C<//> and C</* */> comments. They have C<< commented => 1 >> and no other
-keys. The comment text itself is not available in this release.
+=item * C<comment> events (only with C<emit_comments>) carry the comment
+as written in C<text>, including its delimiters: C<// note> for a
+single-line comment (without the line end), C</* note */> for a
+multi-line one. They have C<< commented => 1 >>.
 
 =item * Type annotations on argument and property values are on the
 L<Text::KDL::XS::Value> object (C<< $ev->{value}->type_annotation >>), not
@@ -245,6 +298,9 @@ in the event hash.
 C<end_node>, unless a parse error intervenes. Arguments and properties of a
 node arrive between its C<start_node> and the C<start_node> of its first
 child (or its own C<end_node>).
+
+=item * The event hashes and the value objects in them are fresh Perl data
+and may be kept or modified.
 
 =back
 
@@ -276,12 +332,12 @@ produces, in order:
 
   my $p = Text::KDL::XS::Parser->new("// note\nnode 1 /-2 {\n  /-gone\n}\n", emit_comments => 1);
   while (my $ev = $p->next_event) {
-      printf "%-10s commented=%d %s\n", $ev->{event}, $ev->{commented}, $ev->{name} // '';
+      printf "%-10s commented=%d %s\n", $ev->{event}, $ev->{commented}, $ev->{name} // $ev->{text} // '';
   }
 
 =for highlighter
 
-  comment    commented=1
+  comment    commented=1 // note
   start_node commented=0 node
   argument   commented=0
   argument   commented=1
@@ -317,7 +373,7 @@ you need. Here we find the first top-level C<version> node and stop:
 The tree builder in L<Text::KDL::XS::Document> is a short loop over these
 events and is a good template for custom builders: keep a stack of open
 nodes, push on C<start_node>, pop on C<end_node>, attach values to the top
-of the stack.
+of the stack, and skip events with C<commented> set.
 
 =head1 SEE ALSO
 

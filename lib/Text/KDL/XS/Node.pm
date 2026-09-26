@@ -3,22 +3,47 @@ package Text::KDL::XS::Node;
 use strict;
 use warnings;
 
-# A Node is a hashref:
-#   name            : string
-#   type_annotation : string|undef
-#   args            : arrayref of Text::KDL::XS::Value
-#   props           : arrayref of [name => Text::KDL::XS::Value]   (ordered)
-#   prop_index      : { name => idx_into_props }                   (last-wins)
-#   children        : arrayref of Text::KDL::XS::Node
+use Carp ();
+use Scalar::Util ();
+use Text::KDL::XS ();
+
+our @CARP_NOT = qw(
+    Text::KDL::XS Text::KDL::XS::Document Text::KDL::XS::Emitter
+    Text::KDL::XS::Parser Text::KDL::XS::Value
+);
+
+my %IS_FIELD = map { $_ => 1 } qw(name type_annotation args props children);
+
 sub new {
-    my ($class, %args) = @_;
+    my ($class, @fields) = @_;
+    my $fields = Text::KDL::XS::_parse_named_arguments(__PACKAGE__ . '->new', 'field', \%IS_FIELD, @fields);
+
+    Carp::croak(__PACKAGE__ . "->new: 'name' is required") unless defined $fields->{name};
+    for my $list (qw(args props children)) {
+        next unless defined $fields->{$list};
+        Carp::croak(__PACKAGE__ . "->new: '$list' must be an ARRAY reference")
+            unless (Scalar::Util::reftype($fields->{$list}) // '') eq 'ARRAY';
+    }
+
     return bless {
-        name            => $args{name},
-        type_annotation => $args{type_annotation},
-        args            => $args{args}     // [],
-        props           => $args{props}    // [],
-        prop_index      => $args{prop_index} // {},
-        children        => $args{children} // [],
+        name            => $fields->{name},
+        type_annotation => $fields->{type_annotation},
+        args            => $fields->{args}     // [],
+        props           => $fields->{props}    // [],
+        children        => $fields->{children} // [],
+    }, $class;
+}
+
+# The constructor used by the tree builder, which only ever passes a name and
+# an optional type annotation that the parser has already validated.
+sub _new_parsed {
+    my ($class, $name, $type_annotation) = @_;
+    return bless {
+        name            => $name,
+        type_annotation => $type_annotation,
+        args            => [],
+        props           => [],
+        children        => [],
     }, $class;
 }
 
@@ -28,41 +53,34 @@ sub args            { $_[0]->{args}            }
 sub props           { $_[0]->{props}           }
 sub children        { $_[0]->{children}        }
 
+# The value of the rightmost property named $key, as the KDL specification
+# requires for repeated keys.
 sub prop {
     my ($self, $key) = @_;
-    my $idx = $self->{prop_index}{$key};
-    return undef unless defined $idx;
-    return $self->{props}[$idx][1];
+    Carp::croak(__PACKAGE__ . "::prop: key is required") unless defined $key;
+    for my $property (reverse @{ $self->{props} }) {
+        return $property->[1] if $property->[0] eq $key;
+    }
+    return undef;
 }
 
-# Plain Perl view - lossy with respect to property order and per-arg type
-# annotations. Documented in POD.
 sub as_data {
     my ($self) = @_;
+    no warnings 'recursion';    # the parser's max_depth bounds the nesting
     return {
         name     => $self->{name},
         type     => $self->{type_annotation},
-        args     => [ map { $_->as_perl } @{ $self->{args} } ],
-        props    => { map { $_->[0] => $_->[1]->as_perl } @{ $self->{props} } },
+        args     => [ map { _perl_value($_) } @{ $self->{args} } ],
+        props    => { map { $_->[0] => _perl_value($_->[1]) } @{ $self->{props} } },
         children => [ map { $_->as_data } @{ $self->{children} } ],
     };
 }
 
-# Internal: append (used by the tree builder)
-sub _push_arg {
-    my ($self, $value) = @_;
-    push @{ $self->{args} }, $value;
-}
-
-sub _push_prop {
-    my ($self, $key, $value) = @_;
-    push @{ $self->{props} }, [ $key, $value ];
-    $self->{prop_index}{$key} = $#{ $self->{props} };
-}
-
-sub _push_child {
-    my ($self, $child) = @_;
-    push @{ $self->{children} }, $child;
+# Value objects become their natural Perl scalar; plain scalars in hand-built
+# nodes are already one.
+sub _perl_value {
+    my ($value) = @_;
+    return Scalar::Util::blessed($value) && $value->isa('Text::KDL::XS::Value') ? $value->as_perl : $value;
 }
 
 1;
@@ -129,7 +147,7 @@ L<Text::KDL::XS::Cookbook>.
 
 =for highlighter
 
-Fields (all optional except C<name>):
+Fields (all optional except C<name>, which must be defined):
 
 =over 4
 
@@ -146,11 +164,11 @@ none.
 =item args
 
 Array reference of argument values, in order. Elements are normally
-L<Text::KDL::XS::Value> objects. Plain scalars, C<undef> and boolean
-objects are accepted as well and are coerced by
-L<Text::KDL::XS/emit_kdl> when the node is emitted (see
-L<Text::KDL::XS/"Scalar coercion">); note that C<as_data> and the C<Value>
-methods are then not available for those elements.
+L<Text::KDL::XS::Value> objects. Plain scalars, C<undef> and the objects
+listed under L<Text::KDL::XS/"Scalar coercion"> are accepted as well and
+are converted by L<Text::KDL::XS/emit_kdl> when the node is emitted;
+L</as_data> returns them as they are. The C<Value> methods are of course
+not available for such elements.
 
 =item props
 
@@ -163,11 +181,11 @@ Array reference of child C<Text::KDL::XS::Node> objects.
 
 =back
 
-The array references are stored, not copied.
-
-B<Limitation:> L</prop> works through an index that only the parser
-builds. For a node created with C<new>, C<prop> returns C<undef> for every
-key; the node still emits correctly. Iterate C<props> instead.
+The array references are stored, not copied. A missing or undefined
+C<name>, an C<args>, C<props> or C<children> value that is not an array
+reference, any other field and an odd number of arguments die, for example
+with C<Text::KDL::XS::Node-E<gt>new: 'name' is required>. C<new> may be
+called on a subclass.
 
 =head1 METHODS
 
@@ -217,14 +235,14 @@ L<Text::KDL::XS::Value>.
 Looks up a property by key. When the key appears more than once the last
 occurrence is returned, as the KDL specification requires. Returns C<undef>
 for a missing key; a property whose value is C<#null> returns a C<Value>
-object with C<is_null> true, so the two cases can be told apart.
+object with C<is_null> true, so the two cases can be told apart. C<undef>
+as the key dies.
 
-The lookup uses an index built by the parser and not updated afterwards.
-Changing the C<value> of a property object is fine, but after adding,
-removing or reordering entries of the C<props> array the index is stale: C<prop>
-then returns old values or the value of a neighbouring key. Read
-restructured properties by iterating C<props>. Hand-built nodes have no
-index at all, see L</new>.
+C<prop> searches the C<props> array from the end, so it always reflects
+its current contents: on hand-built nodes, and after properties have been
+added, removed or reordered. The search is linear in the number of
+properties, which is small in practice; build a hash from C<props> when a
+node has very many.
 
 =head2 children
 
@@ -255,13 +273,14 @@ Returns the node and its subtree as plain Perl data:
 
 Values are converted with L<Text::KDL::XS::Value/as_perl>: C<undef> for
 null, C<1>/C<0> for booleans, numbers as numbers (or digit strings for
-arbitrary precision values), strings as strings. Type annotations on values
-and the number kind are dropped.
+arbitrary precision values), strings as strings. Plain scalars in
+hand-built nodes are returned as they are. Type annotations on values and
+the number kind are dropped.
 
 =head1 INTERNAL METHODS
 
-C<_push_arg>, C<_push_prop> and C<_push_child> are used by the tree
-builder and may change without notice.
+C<_new_parsed> is the constructor used by the tree builder; it may change
+without notice.
 
 =head1 SEE ALSO
 

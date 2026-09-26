@@ -3,34 +3,78 @@ package Text::KDL::XS;
 use strict;
 use warnings;
 
-our $VERSION = '0.001';
+our $VERSION;
 
-use XSLoader;
-XSLoader::load(__PACKAGE__, $VERSION);
+# The XS code is loaded before the class modules below are compiled, so that
+# each of them can also be loaded on its own (they all load this module).
+BEGIN {
+    $VERSION = '0.001';
+    require XSLoader;
+    XSLoader::load(__PACKAGE__, $VERSION);
+}
 
-use Text::KDL::XS::Parser;
+use Carp ();
+use Exporter 'import';
+
 use Text::KDL::XS::Value;
 use Text::KDL::XS::Node;
 use Text::KDL::XS::Document;
+use Text::KDL::XS::Parser;
+use Text::KDL::XS::Emitter;
 
-use Exporter 'import';
 our @EXPORT_OK = qw(parse_kdl emit_kdl);
 
-# parse_kdl($source, %opts) -> Text::KDL::XS::Document
-#   $source : string | filehandle | coderef
-#   %opts   : version => 'detect'|'1'|'2', emit_comments => 0|1
+# Errors raised anywhere in the distribution are reported at the caller's line.
+our @CARP_NOT = qw(
+    Text::KDL::XS::Document Text::KDL::XS::Emitter Text::KDL::XS::Node
+    Text::KDL::XS::Parser Text::KDL::XS::Value
+);
+
+my %VERSION_BY_NAME = (detect => 'detect', 1 => 1, 2 => 2, v1 => 1, v2 => 2);
+
 sub parse_kdl {
-    my ($source, %opts) = @_;
-    my $parser = Text::KDL::XS::Parser->new($source, %opts);
+    my ($source, @options) = @_;
+    my $parser = Text::KDL::XS::Parser->new($source, @options);
     return Text::KDL::XS::Document->_build_from_parser($parser);
 }
 
-# emit_kdl($tree, %opts) -> string
-#   $tree : Text::KDL::XS::Document | Text::KDL::XS::Node | arrayref of Nodes
 sub emit_kdl {
-    my ($tree, %opts) = @_;
-    require Text::KDL::XS::Emitter;
-    return Text::KDL::XS::Emitter->_emit_tree($tree, %opts);
+    my ($tree, @options) = @_;
+    return Text::KDL::XS::Emitter->_emit_tree($tree, @options);
+}
+
+# The KDL version selected by a version option: 'detect', 1 or 2. Accepts
+# detect, 1, 2, v1 and v2 in any letter case; undef means detect.
+sub _normalize_version {
+    my ($who, $version) = @_;
+    return 'detect' unless defined $version;
+    my $normalized = $VERSION_BY_NAME{ lc $version };
+    Carp::croak("$who: unknown version '$version' (expected 'detect', '1' or '2')")
+        unless defined $normalized;
+    return $normalized;
+}
+
+# A hash reference of name => value pairs whose names are all allowed. $noun
+# ('option' or 'field') names them in the error message.
+sub _parse_named_arguments {
+    my ($who, $noun, $allowed, @pairs) = @_;
+    Carp::croak("$who: expected name => value pairs, got an odd number of arguments") if @pairs % 2;
+    my %arguments = @pairs;
+    my @unknown = sort grep { !$allowed->{$_} } keys %arguments;
+    Carp::croak("$who: unknown $noun" . (@unknown == 1 ? '' : 's') . ' ' . join ', ', map {"'$_'"} @unknown)
+        if @unknown;
+    return \%arguments;
+}
+
+# Raises an error caught around a call into the XS code again. The XS code
+# reports errors at the line of $file that called it; such errors are raised
+# again at the user's call site. Errors thrown by user code (source callbacks)
+# and exception objects pass through unchanged.
+sub _rethrow {
+    my ($error, $file) = @_;
+    die $error if ref $error;
+    die $error unless $error =~ s/ at \Q$file\E line \d+(?:, <[^>]*> (?:line|chunk) \d+)?\.\n\z//;
+    Carp::croak($error);
 }
 
 1;
@@ -47,10 +91,11 @@ Text::KDL::XS - KDL Document Language parser and emitter built on libckdl
 
 =for highlighter language=Perl
 
+  use utf8;                             # this source file is UTF-8
   use Text::KDL::XS qw(parse_kdl emit_kdl);
   binmode STDOUT, ':encoding(UTF-8)';   # parsed strings are Perl characters
 
-  # Parse a string (or a filehandle, or a code reference returning chunks).
+  # Parse a character string (or a filehandle, or a code reference returning chunks).
   my $doc = parse_kdl(<<'KDL');
   package "kdl-rs" {
       version "0.4.0"
@@ -176,9 +221,17 @@ L</ENCODING>
 
 L</"FILEHANDLE SOURCES">
 
+=item untrusted input, nesting limits
+
+L</"parse_kdl options">, L<Text::KDL::XS::Cookbook/"Parse untrusted input">
+
 =item what dies and when
 
 L</ERRORS>
+
+=item threads and fork
+
+L</THREADS>
 
 =item known problems and workarounds
 
@@ -201,10 +254,9 @@ Nothing is exported by default. Request the functions you need:
 =for highlighter
 
 Loading C<Text::KDL::XS> also loads L<Text::KDL::XS::Parser>,
-L<Text::KDL::XS::Document>, L<Text::KDL::XS::Node> and
-L<Text::KDL::XS::Value>. L<Text::KDL::XS::Parser> cannot be loaded on its
-own (see L</"KNOWN ISSUES AND LIMITATIONS">); always C<use Text::KDL::XS>
-first.
+L<Text::KDL::XS::Document>, L<Text::KDL::XS::Node>,
+L<Text::KDL::XS::Value> and L<Text::KDL::XS::Emitter>. Each of these
+modules can also be loaded on its own; it loads C<Text::KDL::XS> itself.
 
 =head1 FUNCTIONS
 
@@ -229,34 +281,43 @@ C<$source> is one of:
 
 =item A string
 
-The document text as UTF-8 B<bytes>. This is the fastest source; the
-string is copied once and ckdl reads from the copy. See L</ENCODING> for
-what to do with Perl character strings.
+The document text as a Perl B<character> string: a string literal in a
+source file with C<use utf8>, text read through an C<:encoding(UTF-8)>
+layer, the result of C<Encode::decode>, or the output of L</emit_kdl>.
+This is the fastest source; the string is copied once and ckdl reads from
+the copy.
 
-=item A glob reference or IO object
+A string of UTF-8 B<bytes> (read through a C<:raw> handle, or a literal
+without C<use utf8>) must be decoded first, with C<utf8::decode> or
+C<Encode::decode('UTF-8', ...)>, or passed as a filehandle instead;
+otherwise every byte is taken as one character. See L</ENCODING>.
 
-A reference to a filehandle (C<\*STDIN>, C<$fh> from C<open>), or an
-object with a C<sysread> or C<read> method (L<IO::Handle>, L<IO::File>,
-L<IO::Socket>). Note the backslash: a bare C<*STDIN> is not a reference
-and is parsed as the text C<*main::STDIN>.
+=item A filehandle or IO object
 
-The handle is read in chunks with C<sysread> (or the object's C<sysread>
-or C<read> method), which means it must be backed by a real file
-descriptor and should not have a C<:utf8> or C<:encoding(...)> layer.
-Because C<sysread> bypasses PerlIO's buffer, do not read from the handle
-with C<< <$fh> >> or C<read> before passing it in. In-memory handles
-(C<< open my $fh, '<', \$string >>) are not supported; pass C<$string>
-directly. See L</"FILEHANDLE SOURCES"> for the details.
+A glob (C<*STDIN>), a glob reference (C<\*STDIN>, C<$fh> from C<open>),
+an IO object (C<*STDIN{IO}>, L<IO::Handle>, L<IO::File>, L<IO::Socket>),
+a tied handle, or any other object with a C<read> or C<sysread> method.
+Open handles are read with Perl's C<read>, so every PerlIO layer, data
+buffered by earlier reads and in-memory handles work. See
+L</"FILEHANDLE SOURCES">.
 
 =item A code reference
 
-Called repeatedly as C<< $code->($wanted_bytes) >>. It must return the next
-chunk of the document as a byte string of B<at most C<$wanted_bytes>>
-bytes (at most 4096; the number can vary from call to call), and an empty
-string or C<undef> when the input is exhausted. Bytes beyond C<$wanted_bytes> are discarded without an error,
-which silently loses data, so hand over at most that many. Chunk
-boundaries need not align with lines or tokens. Exceptions thrown inside
-the callback are swallowed and treated as end of input.
+Called as C<< $code->($wanted_bytes) >> whenever the parser needs more
+input. It returns the next chunk of the document, or an empty string or
+C<undef> at the end of the input; after that it is not called again.
+
+Chunks are UTF-8 B<bytes>. A character string (a string with Perl's UTF-8
+flag on) is used in its UTF-8 encoding, so returning characters works as
+well. C<$wanted_bytes> is only a hint: a longer chunk is kept and handed
+to ckdl in pieces, and chunk boundaries need not align with lines, tokens
+or even characters.
+
+The first call happens while the parser is created, before C<parse_kdl>
+or L<Text::KDL::XS::Parser/new> returns: ckdl reads ahead to look for a
+byte order mark. An exception thrown by the code reference propagates
+unchanged (an exception object stays the same object) out of the call
+that needed the input; a reference returned as a chunk dies.
 
 =back
 
@@ -270,25 +331,32 @@ Which KDL syntax to accept. The default C<'detect'> accepts both and
 settles on one at the first version-specific construct (C<#true> versus
 C<true>, C<#"raw"#> versus C<r"raw">, a bare identifier used as a value).
 C<'1'> and C<'2'> accept exactly one version and reject the other's syntax.
-The value is compared case-insensitively. Any other value dies with
-C<unknown version '...' (expected 'detect', '1', or '2')> (the value is
-reported in lower case).
+C<'v1'> and C<'v2'> are accepted as well, in any letter case. Any other
+value dies with C<Text::KDL::XS::Parser: unknown version '...' (expected
+'detect', '1' or '2')>.
 
 See L</"KDL VERSIONS"> for how the versions differ.
 
+=item max_depth => $levels
+
+The deepest nesting of nodes allowed; a top-level node is at depth 1.
+Default 512; C<0> means unlimited. A document nested deeper dies with
+C<KDL parse error: nesting depth exceeds max_depth (512)> as soon as the
+parser reaches the extra level, before the tree gets any deeper. This
+bounds the recursion of L</emit_kdl>, L<Text::KDL::XS::Node/as_data> and
+your own tree walks for documents from untrusted sources.
+
 =item emit_comments => 0 | 1
 
-Do not pass this to C<parse_kdl>. The option makes the underlying parser
-report slashdashed nodes, arguments, properties and children blocks as
-ordinary events flagged C<commented>, and the tree builder ignores that
-flag, so C<< parse_kdl($src, emit_comments => 1) >> puts everything that
-was commented out with C</-> back into the document (comment events
-themselves are discarded). Use L<Text::KDL::XS::Parser> when you need
-comments.
+Accepted for symmetry with L<Text::KDL::XS::Parser>, where it makes the
+parser report comments and slashdashed elements. It does not change the
+result of C<parse_kdl>: comments and elements commented out with C</->
+never become part of the tree.
 
 =back
 
-Unknown options are ignored.
+Unknown options, an odd number of option arguments and invalid values
+die. An option whose value is C<undef> is treated as not given.
 
 =head3 Return value
 
@@ -313,16 +381,20 @@ comment-only document gives a document with no nodes.
 
 Serialises a tree or a plain data structure to KDL and returns the text as
 a Perl character string (encode it as UTF-8 before writing it to a file;
-see L</ENCODING>). The output ends with a newline unless it is empty.
+see L</ENCODING>). The output ends with a newline; an empty document is a
+single newline. Everything is validated before it is written, so
+C<emit_kdl> either returns a document that parses back to the same data or
+dies.
 
 The mode is chosen from the type of the first argument.
 
 =head3 Tree mode
 
 Selected when the argument is a L<Text::KDL::XS::Document>, a
-L<Text::KDL::XS::Node>, or an array reference whose elements are all
-L<Text::KDL::XS::Node> objects. An empty array reference produces an empty
-string; an array that mixes nodes with anything else dies.
+L<Text::KDL::XS::Node>, or a non-empty array reference whose elements are
+all L<Text::KDL::XS::Node> objects; subclasses of these classes are
+accepted everywhere. An array that mixes nodes with anything else is data
+mode, where the nodes make it die.
 
 Tree mode is faithful: it writes arguments and properties in their stored
 order, keeps type annotations on nodes and values, keeps the
@@ -333,14 +405,17 @@ layout, number spelling) is listed in
 L<Text::KDL::XS::Cookbook/"What a round trip loses">.
 
 Argument and property values inside the tree are normally
-L<Text::KDL::XS::Value> objects, but plain scalars and boolean objects are
-accepted too and are coerced as described under L</"Scalar coercion">.
+L<Text::KDL::XS::Value> objects, but plain scalars and objects are
+accepted too and are converted as described under L</"Scalar coercion">.
+A node that is its own descendant dies with C<emit_kdl: cyclic data
+structure>; a node that appears in several places is written in each.
 
 =head3 Data mode
 
-Selected for any other hash or array reference. Data mode is a convenience
-for writing configuration from ordinary Perl data; it is deterministic but
-lossy. Every hash key becomes a node; data mode never writes properties.
+Selected for any other unblessed hash or array reference. Data mode is a
+convenience for writing configuration from ordinary Perl data; it is
+deterministic but lossy. Every hash key becomes a node; data mode never
+writes properties.
 
   Perl value                       Emitted as
   -------------------------------  ----------------------------------------------
@@ -354,12 +429,14 @@ lossy. Every hash key becomes a node; data mode never writes properties.
   { key => [ $s, {...} ] }         key <s>  key { ... }   (mixed: one sibling per element)
   { key => [ [1,2], [3] ] }        key 1 2  key 3         (inner arrays: one sibling each)
   [ $a, $b, ... ]   (top level)    - <a>  - <b>  ...      (nodes named "-")
-  {} or []          (top level)    (empty string)
+  {} or []          (top level)    (a single newline)
   boolean object                   #true / #false
   Text::KDL::XS::Value object      as the object says (type, kind, annotation)
 
-Hash keys are emitted in sorted order. Scalar values are classified by
-L</"Scalar coercion">.
+Hash keys are emitted in sorted order. Single values are classified by
+L</"Scalar coercion">. A hash or array that contains itself dies with
+C<emit_kdl: cyclic data structure>; one that is referenced from several
+places is written in each.
 
 What data mode cannot express: properties; arguments and children on the
 same node; a specific node order (keys are sorted); type annotations on
@@ -369,32 +446,49 @@ L<Text::KDL::XS::Node> tree when you need any of these.
 
 =head3 Scalar coercion
 
-Plain Perl scalars that reach the emitter, in either mode, are mapped like
-this:
+Single values that are not L<Text::KDL::XS::Value> objects, in either
+mode, are mapped like this:
 
-  Perl scalar                                     KDL value
-  ----------------------------------------------  ---------------------------
+  Perl value                                      KDL value
+  ----------------------------------------------  ----------------------------
   undef                                           #null
   JSON::PP::Boolean, Types::Serialiser::Boolean,
-    JSON::Boolean, boolean, Mojo::JSON::_Bool     #true / #false (by truthiness)
-  Text::KDL::XS::Value                            as specified by the object
-  scalar with only a string value                 string
-  scalar with an integer value (IV)               number, integer
-  scalar with a floating point value (NV)         number, float
-  any other scalar                                string
+    JSON::Boolean, boolean, Mojo::JSON::_Bool
+    (or a subclass)                               #true / #false (by truthiness)
+  Text::KDL::XS::Value (or a subclass)            as specified by the object
+  a number: a scalar with an integer or floating
+    point value and no string value, or one whose
+    string value is exactly Perl's rendering of
+    that number                                   number (integer or float)
+  any other plain scalar                          string
+  Math::BigInt, Math::BigFloat                    number, written with its exact digits
+  another object with string overloading          string ("$object")
+  any other object or reference                   dies
 
-The decision uses the scalar's internal flags, not its appearance. C<'42'>
-from a string literal is a string; C<42> is a number; C<'42'> after it has
-been used in arithmetic is a number. Force one or the other with
-C<"$x"> or C<0 + $x>. The strings C<'true'> and C<'false'> are never
-promoted to booleans.
+A number with an integer value is written as an integer over the whole
+native range (-2**63 to 2**64-1, unsigned values included); any other
+number as a float, with the shortest text that reads back as the same
+double (C<0.30000000000000004>, C<1e+21>, C<-0.0>, C<123456789.0>; a float
+always has a decimal point or an exponent). A scalar that has both an
+integer and a floating point value, such as C<3.0> after it has been
+compared with C<==>, is written as an integer.
 
-Other blessed objects (L<Math::BigInt>, L<URI>, ...) are handled
-inconsistently in this release: in tree mode they are stringified and
-written as a KDL string; in data mode they make C<emit_kdl> die with
-C<cannot serialize ... ref>. Unblessed references other than the hashes
-and arrays of data mode (code references, scalar references, globs) always
-die.
+The decision uses the scalar's value, not how it looks. C<'42'> from a
+string literal is a string and C<42> is a number. A string that has been
+used as a number is a number only when its text is exactly the number
+Perl would print: C<'42'> after C<$x + 0> becomes the number C<42>, but
+C<'007'>, C<'1.50'>, C<'1e3'>, C<' 42 '> and dualvars stay strings, so no
+text is ever changed. Perl's false value C<!!0> is the empty string, as
+in L<JSON::PP>. Force one or the other with C<"$x"> or C<0 + $x>. The
+strings C<'true'> and C<'false'> are never promoted to booleans.
+
+L<Math::BigInt> and L<Math::BigFloat> objects become numbers with their
+exact digits (NaN and infinity die with C<emit_kdl: cannot write the
+Math::BigInt NaN as a KDL number>). Any other object with a string
+conversion (L<URI>, L<Path::Tiny>, ...) is written as a string. Objects
+without one, and references other than the hashes and arrays of data mode
+(code, scalar and glob references), die with C<emit_kdl: cannot serialize
+Foo object> or C<emit_kdl: cannot serialize CODE ref>.
 
 =head3 emit_kdl options
 
@@ -404,19 +498,20 @@ die.
 
 Output syntax. C<'2'> (and C<'detect'>, the default) writes KDL 2.0.0:
 C<#true>, C<#null>, bare identifier strings where possible. C<'1'> writes
-KDL 1.0.0: C<true>, C<null>, every string value quoted. The special
-numbers are always written as C<#inf>, C<#-inf> and C<#nan> because v1 has
-no spelling for them. The value is compared case-sensitively; anything else
-dies with C<emit_kdl: unknown version '...'>.
+KDL 1.0.0: C<true>, C<null>, every string value quoted. C<'v1'> and
+C<'v2'> are accepted as well, in any letter case. KDL v1 has no spelling
+for infinity and NaN, so a non-finite float dies in v1 output with
+C<emit_kdl: KDL v1 has no representation for inf/nan>; v2 writes C<#inf>,
+C<#-inf> and C<#nan>.
 
 =item indent => $columns
 
-Number of spaces per nesting level. Default 4.
+Number of spaces per nesting level, an integer from 0 to 64. Default 4.
 
 =item escape_mode => $bitmask
 
 Which characters inside quoted strings are written as escape sequences.
-Values are the ckdl C<kdl_escape_mode> flags:
+Values are combinations of the ckdl C<kdl_escape_mode> flags:
 
   0       minimal: " and \, plus (in v2 output) the characters KDL never
           allows literally: U+0000 to U+0008, U+000E to U+001F, U+007F,
@@ -428,27 +523,34 @@ Values are the ckdl C<kdl_escape_mode> flags:
   0x170   ASCII only: every non-ASCII character becomes \u{...}
 
 C<0x10>, C<0x20> and C<0x40> combine with bitwise or; C<0x170> is a preset
-(C<0x100> has an effect only together with all of C<0x70>). Without
-C<0x20> a string containing a newline is written with the newline inside
-the quotes, which is not valid KDL v2 (v1 accepts it). In v1 output mode
-C<0> really is minimal and writes control characters literally.
+(C<0x100> has an effect only together with all of C<0x70>). Any other bit
+dies. KDL v2 does not allow a newline inside a quoted string, so for v2
+output (C<'2'> and C<'detect'>) C<0x20> is always added. In v1 output
+C<0> really is minimal and writes newlines and control characters
+literally.
 
 =item identifier_mode => 0 | 1 | 2
 
 How node names, property keys, type annotations and (in v2) string values
 are written:
 
-  0    bare whenever the characters allow it (default)
+  0    bare whenever the characters allow it
   1    always quoted
   2    bare only when pure ASCII
 
-Mode 1 is the safe choice when strings, names or keys may equal C<true>,
-C<false>, C<null>, C<inf>, C<nan> or look like numbers; see
-L</"KNOWN ISSUES AND LIMITATIONS">.
+Without this option, C<emit_kdl> writes identifiers bare where possible
+(mode 0) and switches the whole document to mode 1 when a name, key,
+annotation or v2 string value would otherwise be read back as something
+else: a keyword (C<true>, C<false>, C<null>; in v2 also C<inf>, C<-inf>,
+C<nan>) or a number (C<-1>, C<+1>, C<.5>). So the output always parses
+back to the same data. When you pass C<identifier_mode>, it is used as
+given: with mode 0 or 2 such strings are written bare and do not
+round-trip.
 
 =back
 
-Unknown options are ignored.
+Unknown options, an odd number of option arguments and invalid values
+die. An option whose value is C<undef> is treated as not given.
 
 =head1 ENCODING
 
@@ -456,12 +558,16 @@ KDL documents are UTF-8 by definition. The rules for this module are:
 
 =over 4
 
-=item * Input to L</parse_kdl> and L<Text::KDL::XS::Parser> must be UTF-8
-B<bytes>: a byte string, a raw filehandle, or a code reference returning
-byte strings.
+=item * A string passed to L</parse_kdl> or L<Text::KDL::XS::Parser/new>
+is a Perl B<character> string.
 
-=item * Everything the parser returns (names, keys, strings, annotations)
-is a Perl B<character> string with the UTF-8 flag on.
+=item * Filehandles and code references deliver the document as UTF-8
+B<bytes>. A handle with an C<:encoding(UTF-8)> or C<:utf8> layer and a
+code reference returning character strings work too: characters are
+encoded to UTF-8 before they reach the parser.
+
+=item * Everything the parser returns (names, keys, strings, annotations,
+comment text) is a Perl B<character> string.
 
 =item * L</emit_kdl> takes Perl character strings and returns a character
 string. Encode it when writing it out, either explicitly
@@ -473,50 +579,66 @@ UTF-8 with a "Wide character" warning.
 
 =back
 
-In this release, giving C<parse_kdl> a character string that contains
-non-ASCII characters does not work: characters below U+0100 are passed to
-ckdl as Latin-1 bytes (which produces a parse error or wrong text) and
-characters at or above U+0100 make it die with C<Wide character in
-subroutine entry>. Encode such strings first:
+So C<parse_kdl(emit_kdl($data))> always works, and so does parsing text
+read through an C<:encoding(UTF-8)> layer. A string of UTF-8 bytes, such
+as a heredoc in a source file without C<use utf8> or data slurped through
+a C<:raw> handle, must be decoded first:
 
 =for highlighter language=Perl
 
-  use utf8;
-  use Encode qw(encode);
-  my $doc = parse_kdl(encode('UTF-8', "café \"✓\"\n"));
+  my $doc = parse_kdl(Encode::decode('UTF-8', $bytes));
+  utf8::decode($bytes) or die "not UTF-8";   # in place, no module needed
+  my $doc = parse_kdl($bytes);
 
 =for highlighter
 
-Byte strings that already contain UTF-8, such as a heredoc in a source file
-without C<use utf8> or data read through a C<:raw> handle, need no
-conversion. Invalid UTF-8 in the input is a parse error.
+Text::KDL::XS 0.001 read string sources as UTF-8 bytes; code that relied
+on that has to decode as shown above (or pass the filehandle).
+
+Only Unicode text is accepted, in both directions. Input that is not
+well-formed UTF-8, or that encodes a surrogate (U+D800 to U+DFFF) or a
+code point above U+10FFFF, dies with C<KDL parse error: input is not
+valid UTF-8>; a C<\u{...}> escape that produces such a code point dies
+with C<KDL parse error: string contains a surrogate or a code point above
+U+10FFFF>. C<emit_kdl> dies when a name, key, annotation or string value
+contains one (C<emit_kdl: string value contains a surrogate or a code
+point above U+10FFFF>) instead of writing something else.
 
 =head1 FILEHANDLE SOURCES
 
-The parser reads filehandles with C<sysread>, in chunks of the size the
-underlying library asks for. Consequences:
+An open filehandle is read with Perl's C<read>, in chunks of the size the
+underlying library asks for (a few kilobytes). Consequences:
 
 =over 4
 
-=item * Handles should be raw: open them with C<:raw> or call C<binmode>.
-A handle with a C<:utf8> or C<:encoding(...)> layer makes C<sysread> fail,
-and the failure is currently reported as end of input rather than as an
-error, so you get an empty or truncated document. A C<:crlf> layer is
-ignored by C<sysread> and does no harm.
+=item * Any PerlIO layer works. A C<:raw> handle delivers UTF-8 bytes, an
+C<:encoding(UTF-8)> or C<:utf8> handle delivers characters, which are
+encoded again; C<:crlf> is harmless because KDL accepts CRLF line ends.
 
-=item * Do not mix buffered reads and C<parse_kdl> on the same handle.
-Anything PerlIO has already buffered is invisible to C<sysread>.
+=item * Reading continues where the handle stands: lines read with
+C<< <$fh> >> before are not seen by the parser, and nothing that PerlIO
+has buffered is lost.
 
-=item * In-memory handles have no file descriptor and read as empty. Pass
-the string to C<parse_kdl> instead.
+=item * In-memory handles (C<< open my $fh, '<', \$string >>), tied
+handles and bare globs such as C<*STDIN> work.
 
-=item * Pipes, sockets and C<STDIN> work; the parser simply blocks until
-enough bytes arrive or the peer closes the connection.
+=item * C<read> waits until it has the requested number of bytes or the
+input ends. On a pipe or socket the first events can therefore arrive
+later than the data they describe. When latency matters, pass a code
+reference that uses C<sysread> (see
+L<Text::KDL::XS::Cookbook/"Read from STDIN, a socket or a pipe">).
+
+=item * A read error dies with C<Text::KDL::XS::Parser: read failed: ...>
+(the text of C<$!>); a closed filehandle dies with
+C<Text::KDL::XS::Parser: filehandle is not open>.
 
 =back
 
-When these constraints are inconvenient, read the file yourself and pass a
-string, or pass a code reference that returns chunks.
+An object that is not a filehandle but has a C<read> method (or, failing
+that, C<sysread>) is read through it. The method is called like Perl's
+C<read>, as C<< $object->read($buffer, $length) >>, and must return the
+number of bytes or characters read, C<0> at the end of the input, or
+C<undef> on error.
 
 =head1 KDL VERSIONS
 
@@ -525,8 +647,9 @@ document that parses under both versions has the same meaning under both.
 The differences that matter most when reading or writing with this module
 are the C<#> prefix on C<#true>, C<#false> and C<#null>; bare identifier
 strings as values (v2 only); raw strings C<#"..."#> (v2) versus
-C<r"..."> (v1); and multi-line strings C<"""> (v2) versus literal newlines
-inside quotes (v1). The complete table is in
+C<r"..."> (v1); multi-line strings C<"""> (v2) versus literal newlines
+inside quotes (v1); and the keyword numbers C<#inf>, C<#-inf> and C<#nan>
+(v2 only). The complete table is in
 L<Text::KDL::XS::Cookbook/"Differences between KDL v1 and v2">.
 
 With the default C<< version => 'detect' >>, the parser accepts either
@@ -539,22 +662,41 @@ find out.
 C<emit_kdl> defaults to v2 output. Pass C<< version => '1' >> to write
 legacy documents; the parsed data is identical either way, so converting a
 document between versions is a parse followed by an emit
-(L<Text::KDL::XS::Cookbook/"Converting between versions">).
+(L<Text::KDL::XS::Cookbook/"Converting between versions">). A document
+containing C<#inf>, C<#-inf> or C<#nan> cannot be converted to v1.
 
 =head1 ERRORS
 
-All errors are exceptions (C<die>). The messages you can expect:
+All errors are exceptions (C<die>). Messages end with the location of the
+call in your code (C<at script.pl line 12.>), not a line inside this
+distribution. The exception is an exception thrown by a source code
+reference, which is passed through exactly as thrown.
+
+=head2 Parsing
 
 =over 4
 
-=item C<KDL parse error at .../Text/KDL/XS/Parser.pm line 39.>
+=item C<KDL parse error: REASON>
 
-The input is not valid KDL for the selected version. Raised by
-C<parse_kdl> and by L<Text::KDL::XS::Parser/next_event>. The underlying
-library provides no line or column information, and in this release its
-reason text (such as C<Unexpected end of data (unclosed lists of
-children)>) is not included in the message. The error is attributed to a
-line inside C<Text::KDL::XS::Parser> rather than to your call site.
+The input is not valid KDL for the selected version. C<REASON> is the
+explanation of the underlying library, for example C<Unexpected end of
+data (unclosed lists of children)>, C<Dangling slashdash (/-)>,
+C<Whitespace required before argument or property> or C<Bare identifier
+not allowed here>. There is no line or column: the library does not track
+positions. Raised by C<parse_kdl> and by
+L<Text::KDL::XS::Parser/next_event>. After an error the parser is
+finished: every further C<next_event> dies with the same error.
+
+=item C<KDL parse error: input is not valid UTF-8>
+
+=item C<KDL parse error: string contains a surrogate or a code point above U+10FFFF>
+
+See L</ENCODING>. The second message names the field: C<node name>,
+C<property key>, C<type annotation>, C<string> or C<comment>.
+
+=item C<KDL parse error: nesting depth exceeds max_depth (512)>
+
+The document is nested deeper than the C<max_depth> option allows.
 
 =item C<Text::KDL::XS::Parser: source is required>
 
@@ -563,223 +705,198 @@ C<parse_kdl(undef)>.
 =item C<Text::KDL::XS::Parser: unsupported source ref type 'X'>
 
 The source was a reference that is neither a code reference nor a
-filehandle-like object (for example an array or hash reference).
+filehandle nor an object with a C<read> or C<sysread> method (for example
+an array or hash reference).
 
-=item C<unknown version 'X' (expected 'detect', '1', or '2')>
+=item C<Text::KDL::XS::Parser: filehandle is not open>
 
-Bad C<version> option to C<parse_kdl>.
+=item C<Text::KDL::XS::Parser: read failed: ...>
 
-=item C<Wide character in subroutine entry>
+See L</"FILEHANDLE SOURCES">.
 
-C<parse_kdl> was given a character string with a character above U+00FF,
-or a code reference returned one. See L</ENCODING>.
+=item C<Text::KDL::XS::Parser: the source callback must return a string or undef, not a reference>
 
-=item C<emit_kdl: unknown version 'X'>
+A code reference source returned a reference.
 
-Bad C<version> option to C<emit_kdl>.
+=item C<Text::KDL::XS::Parser: next_event called from inside the parser's own source callback>
 
-=item C<emit_kdl: expected Document, Node, ARRAY ref, or HASH ref>
+A source code reference called C<next_event> on the parser it feeds.
 
-C<emit_kdl> was given a plain scalar or an unsupported reference.
+=item C<Text::KDL::XS::Parser: unknown version 'X' (expected 'detect', '1' or '2')>
 
-=item C<emit_kdl: cannot serialize X ref>
+=item C<Text::KDL::XS::Parser: unknown option 'X'>
 
-Data mode met a value it cannot convert (a code reference, a scalar
-reference, a Node inside a data-mode array, an object that is not a
-boolean or a L<Text::KDL::XS::Value>).
+=item C<Text::KDL::XS::Parser: expected name =E<gt> value pairs, got an odd number of arguments>
 
-=item C<emit_kdl: refs cannot appear as a single scalar value here>
+=item C<Text::KDL::XS::Parser: max_depth must be a non-negative integer, got 'X'>
 
-A reference was found where tree mode expected a scalar or C<Value>
-object (for example a hash reference inside C<< $node->args >>).
-
-=item C<emit_kdl: tree mode expects Text::KDL::XS::Node, got X>
-
-An element of C<< $node->children >> or C<< $doc->nodes >> is not a Node.
-
-=item C<emit_arg: unknown value type 'X'>, C<emit_property: unknown value type 'X'>
-
-A hand-built L<Text::KDL::XS::Value> has a C<type> other than C<null>,
-C<bool>, C<number> or C<string>.
-
-=item C<Text::KDL::XS::Value-E<gt>new: 'type' is required>
-
-C<< Text::KDL::XS::Value->new >> without a C<type>.
-
-=item C<Undefined subroutine &Text::KDL::XS::_OPT_DETECT called>
-
-L<Text::KDL::XS::Parser> was loaded without C<Text::KDL::XS>. Add
-C<use Text::KDL::XS;>.
+Bad options to C<parse_kdl> or L<Text::KDL::XS::Parser/new>.
 
 =back
 
-Warnings you may see: C<Use of uninitialized value> from the emitter when
-a number C<Value> has no C<kind>; C<Argument "..." isn't numeric> from
-C<as_number> on a non-numeric string; C<Deep recursion> from
-C<emit_kdl> and C<as_data> on documents nested 100 or more levels deep.
-
-=head1 KNOWN ISSUES AND LIMITATIONS
-
-This is the complete list for the current release, with the workaround
-for each. The identifiers in brackets refer to the maintainer's
-C<FINDINGS.md> in the source repository
-(L<https://github.com/Davenonymous/perl-kdl-xs>), which has reproduction
-steps and suggested fixes; that file is not part of the CPAN tarball.
+=head2 Emitting
 
 =over 4
 
-=item Floating point output can be wrong [C1]
+=item C<emit_kdl: expected Document, Node, ARRAY ref, or HASH ref>
 
-The float formatter in the bundled ckdl release drops digits or produces
-wrong digits for many values: C<0.1 + 0.2> is written as C<0.3>,
-C<123456789.0> as C<1.2345679e8>, C<1908124443056.387> as
-C<1.098124443056387e12>. Perl integers (IV) are unaffected; floating
-point values (NV) are affected even when integral. Short decimals such as
-C<3.14> and C<0.5> come out right. If precision matters, format the number
-yourself and pass it as a string-encoded number; see
-L<Text::KDL::XS::Cookbook/"Emitting floating point numbers safely">.
+C<emit_kdl> was given a plain scalar, a code reference or an object that
+is not a document or node.
 
-=item Character strings are not accepted as parser input [C2]
+=item C<emit_kdl: cannot serialize X object>, C<emit_kdl: cannot serialize X ref>
 
-See L</ENCODING>. Encode to UTF-8 first.
+A value that L</"Scalar coercion"> does not accept: an object without a
+string conversion, or a reference other than the hashes and arrays of
+data mode.
 
-=item Integers above 2**63-1 are emitted incorrectly [C3]
+=item C<emit_kdl: cyclic data structure>
 
-A Perl unsigned integer larger than C<9223372036854775807> is written as a
-negative number. Pass such values as string-encoded numbers
-(C<< Text::KDL::XS::Value->new(type => 'number', kind => 'string', value => "$n") >>).
+A hash, array or node contains itself.
 
-=item Passing C<emit_comments> to C<parse_kdl> resurrects slashdashed content [C4]
+=item C<emit_kdl: tree mode expects Text::KDL::XS::Node, got X>
 
-See L</"parse_kdl options">. Never pass the option to C<parse_kdl>.
+An element of C<< $node->children >> or C<< $doc->nodes >> is not a node.
 
-=item Number kinds do not follow the 64-bit rule exactly [M7]
+=item C<emit_kdl: a property must be a [ key =E<gt> value ] pair>
 
-Integers with a magnitude from 2**31 to 2**32-1 (for example
-C<0xFFFFFFFF>, or Unix timestamps after 2038) and the value
--9223372036854775808 come back as C<< kind => 'string' >> rather than
-C<'integer'>; decimals with 16 or more digits written before the exponent
-(leading and trailing zeros count) or a written exponent beyond 284 come
-back as C<'string'> rather than C<'float'>. The text is exact in every
-case. Do not rely on C<kind> to judge a number's size; see
-L<Text::KDL::XS::Value/"VALUE MODEL">.
+An element of C<< $node->props >> is not an array reference.
 
-=item Parse errors carry no reason and no position [M1, U1, m3]
+=item C<emit_kdl: node name must be defined>, C<emit_kdl: property key must be defined>
 
-See L</ERRORS>. The error is also attributed to a line inside this
-distribution rather than to your call site.
+A hand-built node without a name, or a property with an undefined key.
 
-=item Filehandles must be raw, unread, and real [M2]
+=item C<emit_kdl: node name contains a surrogate or a code point above U+10FFFF>
 
-See L</"FILEHANDLE SOURCES">. Exceptions thrown by a code reference source
-are swallowed and treated as end of input.
+See L</ENCODING>; the message names the field.
 
-=item Code reference chunks longer than requested are truncated [M6]
+=item C<emit_kdl: KDL v1 has no representation for inf/nan>
 
-Bytes beyond C<$wanted_bytes> are dropped silently. Return at most
-C<$wanted_bytes> per call; see L</Sources>.
+A non-finite float in C<< version => '1' >> output.
 
-=item Strings equal to keywords or numbers are emitted bare [M3]
+=item C<emit_kdl: cannot write the Math::BigInt NaN as a KDL number>
 
-The strings C<true>, C<false>, C<null>, C<inf>, C<-inf>, C<nan>, and
-strings that look like numbers (C<-1>, C<+1>, C<.5>), are written without
-quotes as v2 values and as node names and property keys in both versions,
-and therefore change meaning or fail to parse. Use
-C<< identifier_mode => 1 >> when your data may contain them.
+A L<Math::BigInt> or L<Math::BigFloat> that is NaN or infinite.
 
-=item Comment text is not exposed [M4]
+=item C<emit_kdl: unknown version 'X' (expected 'detect', '1' or '2')>
 
-The streaming parser reports where comments are, not what they say.
+=item C<emit_kdl: indent must be an integer from 0 to 64, got 'X'>
 
-=item Blessed objects are handled inconsistently by the emitter [M5]
+=item C<emit_kdl: escape_mode must be a combination of 0x10, 0x20, 0x40 and 0x170, got 'X'>
 
-See L</"Scalar coercion">.
+=item C<emit_kdl: identifier_mode must be an integer from 0 to 2, got 'X'>
 
-=item An empty document is emitted as the empty string [m5]
+=item C<emit_kdl: unknown option 'X'>
 
-Other emitters write a single newline. Harmless unless you compare bytes.
+Bad options to C<emit_kdl>.
 
-=item C<version> is case-insensitive for parsing only [m7]
+=item C<emit_kdl: 'X' is not a KDL number>, C<emit_kdl: unknown number kind 'X' ...>, C<emit_kdl: unknown value type 'X' ...>
 
-C<parse_kdl> accepts C<'DETECT'>; C<emit_kdl> does not.
+A L<Text::KDL::XS::Value> whose hash was changed by hand to something
+that L<Text::KDL::XS::Value/new> would have refused. The emitter checks
+every value again, so that nothing but valid KDL is ever written.
 
-=item C<as_number> returns text for arbitrary precision numbers [m9]
+=back
 
-See L<Text::KDL::XS::Value/as_number>; use L<Math::BigInt> or
-L<Math::BigFloat> for exact arithmetic.
+=head2 Constructors
 
-=item C<prop> does not work on hand-built or restructured nodes [m1]
+L<Text::KDL::XS::Value/new>, L<Text::KDL::XS::Node/new> and
+L<Text::KDL::XS::Document/new> die with messages starting with their class
+name, for example C<Text::KDL::XS::Value-E<gt>new: unknown type 'Number'
+(expected null, bool, number or string)>; see the class documentation.
+Calling a method of L<Text::KDL::XS::Parser> on something that is not a
+parser object made by its constructor dies with C<not a valid
+Text::KDL::XS::Parser object>.
 
-C<< $node->prop >> uses an index built by the parser. A node created with
-C<< Text::KDL::XS::Node->new >> has none (C<prop> returns C<undef>), and
-adding, removing or reordering entries of C<< $node->props >> leaves the
-index stale. Iterate C<props> in those cases.
+=head2 Warnings
 
-=item Duplicate properties are all re-emitted [m2]
+L<Text::KDL::XS::Value/as_number> on a string value that is not numeric
+warns C<Argument "..." isn't numeric>, like any numeric use of such a
+string.
 
-C<node a=1 a=2> is written back as C<node a=1 a=2>; other implementations
-write C<node a=2>. Both parse to the same data.
+=head1 KNOWN ISSUES AND LIMITATIONS
 
-=item Write failures inside the emitter are not detected [m4]
+The remaining limitations come from the underlying ckdl library or from
+KDL itself.
 
-The XS layer ignores ckdl's success flag.
+=over 4
 
-=item Unknown options are silently ignored [m6]
+=item Parse errors carry no position
 
-A misspelt option such as C<emit_comment> has no effect and no warning.
+ckdl does not track lines or columns, so errors have a reason but no
+location in the document.
 
-=item C<Text::KDL::XS::Parser> cannot be loaded on its own [m10]
+=item Keyword-like strings switch the whole document to quoted identifiers
 
-C<use Text::KDL::XS::Parser;> without C<use Text::KDL::XS;> dies at the
-first C<new> (the same applies to the internal Emitter; Value, Node and
-Document load fine alone). Load C<Text::KDL::XS> first.
+ckdl would write a string such as C<true> or C<-1> without quotes, which
+reads back as a keyword or a number. C<emit_kdl> detects this and writes
+the document with every identifier quoted (see
+L</"emit_kdl options">), which is correct but more verbose than needed.
 
-=item Surrogate escapes are accepted in v1 and detect mode [m11]
-
-C<\u{D800}> to C<\u{DFFF}> are forbidden by the specification.
-C<< version => '2' >> rejects them; C<< version => '1' >> and the default
-detection accept them and return a Perl string containing a lone
-surrogate. C<\u{}> with no digits is accepted everywhere and yields
-U+0000 [m15].
-
-=item Detect mode accepts C<.5> as an identifier [m12]
-
-C<.5>, C<-.5> and C<+.5> are rejected by both C<< version => '1' >> and
-C<< version => '2' >> but accepted as strings by the default detection.
-
-=item C<escape_mode> without C<0x20> writes literal newlines [m13]
-
-The output is not valid KDL v2; see L</"emit_kdl options">.
-
-=item A children block needs whitespace before it [U2]
+=item A children block needs whitespace before it
 
 KDL 2.0.0 requires it, so C<node{}> is correctly rejected in v2, but ckdl
 rejects it in v1 mode as well although KDL 1.0.0 allows it. Write
 C<node {}>.
 
-=item Vertical tab is whitespace, not a newline [U5]
-
-KDL 2.0.0 lists U+000B as a newline; ckdl treats it as whitespace.
-
-=item Special numbers are always written in v2 syntax [U4]
-
-C<#inf>, C<#-inf> and C<#nan> appear even in v1 output, where they are not
-valid.
-
-=item Detect mode is not a complete KDL v1 parser [U3]
+=item Detect mode is not a complete KDL v1 parser
 
 ckdl documents the hybrid mode as exact for v2 and for I<almost> all v1
 documents. Pin C<< version => '1' >> for strict v1.
 
-=item No nesting limit [m14]
+=item Detect mode accepts C<.5> as an identifier
 
-Deeply nested input parses (the tree builder is iterative), but
-C<emit_kdl>, C<as_data> and any recursive walk of your own recurse once
-per level. Check the depth with the streaming parser before building a
-tree from untrusted input
-(L<Text::KDL::XS::Cookbook/"Parse untrusted input">).
+C<.5>, C<-.5> and C<+.5> are rejected by both C<< version => '1' >> and
+C<< version => '2' >> but accepted as strings by the default detection.
+
+=item Unicode escapes are parsed leniently
+
+C<\u{}> with no digits is accepted and yields U+0000, and more than six
+hex digits are accepted and wrap around (C<\u{1000000041}> is C<A>).
+Escapes that produce a surrogate or a code point above U+10FFFF are
+rejected (see L</ENCODING>).
+
+=item Parsing leaks a few bytes per property
+
+When ckdl reports a property it replaces an internal string (the node
+name or the previous key) without freeing it, so every property of a
+parsed document leaks one small allocation (about 32 bytes). Documents
+without properties are not affected. This only matters for long-running
+processes that parse many documents (about 30 MB per million
+properties); the fix belongs in ckdl.
+
+=item Vertical tab is whitespace, not a newline
+
+KDL 2.0.0 lists U+000B as a newline; ckdl treats it as whitespace.
+
+=item Special numbers cannot be written as KDL v1
+
+KDL 1.0.0 has no spelling for infinity and NaN; C<emit_kdl> dies instead
+of writing invalid v1.
+
+=item Number spelling is not preserved
+
+Numbers are written in a canonical form: C<0xFF> comes back as C<255>,
+C<1_000> as C<1000>, C<1e3> as C<1000.0>. Only numbers kept as text (kind
+C<string>, see L<Text::KDL::XS::Value/"VALUE MODEL">) keep their digits.
+ckdl's own float parser is up to one unit in the last place off; the
+values this module returns are rounded correctly.
+
+=item Duplicate properties are all written
+
+C<node a=1 a=2> is written back as C<node a=1 a=2>, the way it was read;
+other implementations write C<node a=2>. Both parse to the same data.
 
 =back
+
+=head1 THREADS
+
+Parser and emitter objects hold C state and are never copied into a new
+thread: in a thread created while such an object exists, the copy is an
+unblessed, unusable reference. Create parsers inside the thread that uses
+them; C<parse_kdl> and C<emit_kdl> can be called from any thread.
+Document, node and value objects are plain Perl data and are cloned like
+any other. After C<fork>, each process has its own copy of everything and
+may use it.
 
 =head1 PERFORMANCE NOTES
 
@@ -793,10 +910,8 @@ Values are created as small blessed hashes; a document with a million
 values needs about 500 MB as a tree. Use L<Text::KDL::XS::Parser> for
 anything of that size.
 
-The module has no global state apart from the loaded XS code; parser and
-emitter objects are independent and may be used from different threads or
-after C<fork> as long as each object stays with one thread. It requires
-Perl 5.12 or newer.
+The module requires Perl 5.12 or newer built with 64-bit integers
+(C<ivsize> 8, the default on 64-bit platforms).
 
 =head1 SEE ALSO
 
