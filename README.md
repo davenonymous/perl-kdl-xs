@@ -152,10 +152,9 @@ compiler and a perl with 64-bit integers are.
 
 ## Status
 
-Version 0.001 was the first CPAN release. The next release, 0.002, fixes
-the defects found in 0.001 (see `Changes`; what remains are the upstream
-limitations above) and changes one behaviour on purpose:
-string sources are character strings. The API
+Version 0.002 fixes the defects found in 0.001 (see `Changes`; what
+remains are the upstream limitations above) and changes one behaviour on
+purpose: string sources are character strings. The API
 (`parse_kdl`, `emit_kdl`, `Parser`, `Document`, `Node`, `Value`) is
 otherwise stable; `Value` gained `as_bignum`.
 

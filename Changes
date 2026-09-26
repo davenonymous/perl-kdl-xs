@@ -1,6 +1,6 @@
 Revision history for Text-KDL-XS
 
-0.002  (unreleased)
+0.002  2026-09-26
         Incompatible changes:
         - A string passed to parse_kdl or Text::KDL::XS::Parser->new is
           now read as a Perl character string, like the output of

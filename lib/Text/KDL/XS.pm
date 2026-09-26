@@ -8,7 +8,7 @@ our $VERSION;
 # The XS code is loaded before the class modules below are compiled, so that
 # each of them can also be loaded on its own (they all load this module).
 BEGIN {
-    $VERSION = '0.001';
+    $VERSION = '0.002';
     require XSLoader;
     XSLoader::load(__PACKAGE__, $VERSION);
 }
