@@ -18,5 +18,4 @@ ppport.h
 *.tar.gz
 *.a
 *.lib
-RELEASING.md
 /docs/
