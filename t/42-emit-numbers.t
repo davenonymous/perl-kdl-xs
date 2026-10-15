@@ -50,10 +50,18 @@ is sprintf('%g', parse_kdl(emit_kdl({ n => -0.0 }))->nodes->[0]->args->[0]->as_n
     my $kdl = emit_kdl({ n => \@doubles });
     my @texts = split / /, ($kdl =~ /\An (.*)\n\z/)[0];
     is scalar(grep { !/[.e]/ } @texts), 0, 'every emitted float has a decimal point or an exponent';
-    my @read_back = map { $_->as_number } @{ parse_kdl($kdl)->nodes->[0]->args };
-    my @different = grep { $read_back[$_] != $doubles[$_] } 0 .. $#doubles;
-    is scalar @different, 0, '10000 random doubles read back unchanged'
-        or diag sprintf '%.17g', $doubles[ $different[0] ];
+    SKIP: {
+        # ckdl reads a float as mantissa * pow(10, exponent), which rounds
+        # twice. With a correctly rounded pow (glibc, macOS, the BSDs) every
+        # double below survives; the Windows C runtime's pow is not, and a
+        # few come back one ulp off.
+        skip "ckdl's float conversion is one ulp off for some values with the Windows C runtime", 1
+            if $^O eq 'MSWin32';
+        my @read_back = map { $_->as_number } @{ parse_kdl($kdl)->nodes->[0]->args };
+        my @different = grep { $read_back[$_] != $doubles[$_] } 0 .. $#doubles;
+        is scalar @different, 0, '10000 random doubles read back unchanged'
+            or diag sprintf '%.17g', $doubles[ $different[0] ];
+    }
 }
 
 # Non-finite values have no KDL v1 spelling.
