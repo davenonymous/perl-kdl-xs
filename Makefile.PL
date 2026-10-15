@@ -2,12 +2,15 @@ use strict;
 use warnings;
 use Config;
 use ExtUtils::MakeMaker;
-use Alien::ckdl;
 use Devel::PPPort;
 
 # ckdl reports integers as long long; the XS layer stores them in IVs.
 die "OS unsupported: Text::KDL::XS needs a perl with 64-bit integers (ivsize >= 8)\n"
     unless $Config{ivsize} >= 8;
+
+# The ckdl sources under ckdl/ are compiled into the extension; see
+# ckdl/UPSTREAM.md for the pinned upstream commit and how to update it.
+my @ckdl_sources = map { "ckdl/src/$_.c" } qw(bigint compat emitter parser str tokenizer utf8);
 
 # Generate ppport.h so XS.xs can compile on a fresh checkout.
 # The file is a build artefact and stays out of version control.
@@ -23,14 +26,10 @@ WriteMakefile(
     MIN_PERL_VERSION => '5.012',
 
     CONFIGURE_REQUIRES => {
-        'ExtUtils::MakeMaker' => '6.64',
-        'Alien::ckdl'         => '0',
+        'ExtUtils::MakeMaker' => '7.06',
         'Devel::PPPort'       => '3.68',
     },
-    BUILD_REQUIRES => {
-        'Alien::ckdl' => '0',
-    },
-    # ckdl is linked statically, so Alien::ckdl is not needed at run time.
+    # ckdl is compiled in, so there is no run-time library dependency.
     PREREQ_PM => {
         'Carp'           => '0',
         'Exporter'       => '5.57',
@@ -46,8 +45,9 @@ WriteMakefile(
 
     OBJECT => '$(O_FILES)',
     XS     => { 'XS.xs' => 'XS.c' },
-    C      => [ 'XS.c' ],
-    INC    => Alien::ckdl->cflags_static,
+    C      => [ 'XS.c', @ckdl_sources ],
+    INC    => '-Ickdl/include',
+    DEFINE => ckdl_defines(),
     LIBS   => [ ckdl_libs() ],
     ( $Config{gccversion} ? ( CCFLAGS => "$Config{ccflags} -Wall -Wextra" ) : () ),
 
@@ -66,12 +66,19 @@ WriteMakefile(
     },
 );
 
-# libkdl.a uses pow() and log10(); link libm explicitly instead of relying on
+# Mirrors what ckdl's CMakeLists.txt sets for a static build. compat.c
+# supplies reallocf() unless the C library already has it, which the
+# BSD-derived platforms do.
+sub ckdl_defines {
+    my @defines = qw(-DBUILDING_KDL=1 -DKDL_STATIC_LIB=1);
+    push @defines, '-DHAVE_REALLOCF' if $^O =~ /^(?:darwin|freebsd|openbsd|netbsd|dragonfly)$/;
+    return join ' ', @defines;
+}
+
+# ckdl uses pow() and log10(); link libm explicitly instead of relying on
 # the perl binary to provide it.
 sub ckdl_libs {
-    my $libs = Alien::ckdl->libs_static;
-    $libs .= ' -lm' unless $^O eq 'MSWin32';
-    return $libs;
+    return $^O eq 'MSWin32' ? '' : '-lm';
 }
 
 sub MY::postamble {
@@ -144,4 +151,20 @@ release :: release-check
 	@echo "  git tag -a v$(VERSION) -m 'Release v$(VERSION)'"
 	@echo "  git push --follow-tags"
 MAKE_FRAG
+}
+
+{
+    package MY;
+
+    # MakeMaker's .c -> .o rule names no output file, so the compiler
+    # would write the objects for ckdl/src/*.c next to the Makefile while
+    # the link step looks for them in ckdl/src. Name the output explicitly.
+    sub c_o {
+        my $self = shift;
+        my $rules = $self->SUPER::c_o(@_);
+        my $object = $self->xs_obj_opt('$*$(OBJ_EXT)');
+        $rules =~ s/^(\t\$\(CCCMD\) [^\n]*\$\*\.c)$/$1 $object/m
+            or die "Makefile.PL: MakeMaker's .c rule has changed shape; cannot add the object output option\n";
+        return $rules;
+    }
 }

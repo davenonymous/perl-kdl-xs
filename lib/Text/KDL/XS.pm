@@ -929,18 +929,15 @@ The classes that make up the API.
 
 Internal; documented for completeness.
 
-=item L<Alien::ckdl>
-
-Builds and provides the ckdl library this module links against; its
-C<alienfile> pins the ckdl commit that is compiled.
-
 =item L<https://kdl.dev>, L<https://github.com/kdl-org/kdl>
 
 The KDL specification and reference test suite.
 
 =item L<https://github.com/tjol/ckdl>
 
-The C library doing the actual parsing and emitting.
+The C library doing the actual parsing and emitting. A copy of its
+sources is bundled in the F<ckdl> directory of this distribution and
+compiled into the module; F<ckdl/UPSTREAM.md> names the upstream commit.
 
 =back
 
@@ -953,7 +950,6 @@ Davenonymous E<lt>perl@davenonymous.comE<gt>
 Copyright (C) 2026 Davenonymous.
 
 This Perl distribution is licensed under the same terms as Perl itself.
-The bundled C<ckdl> library (linked statically via L<Alien::ckdl>) is
-MIT-licensed.
+The bundled C<ckdl> library is MIT-licensed; see F<ckdl/COPYING>.
 
 =cut

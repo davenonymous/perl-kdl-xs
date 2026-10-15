@@ -145,10 +145,10 @@ make test
 make install
 ```
 
-`Text::KDL::XS` links statically against ckdl through
-[`Alien::ckdl`](https://github.com/davenonymous/perl-alien-ckdl), which
-builds the C library from source. No system package is needed; a C11
-compiler and a perl with 64-bit integers are.
+The ckdl sources are bundled in the `ckdl` directory and compiled into
+the module, so no system package and no Alien module is needed; a C11
+compiler and a perl with 64-bit integers are. `ckdl/UPSTREAM.md` names
+the bundled upstream commit.
 
 ## Status
 
@@ -162,12 +162,10 @@ otherwise stable; `Value` gained `as_bignum`.
 
 - [KDL specification](https://github.com/kdl-org/kdl) and [kdl.dev](https://kdl.dev)
 - [ckdl](https://github.com/tjol/ckdl), the underlying C library
-- [`Alien::ckdl`](https://github.com/davenonymous/perl-alien-ckdl)
 
 ## License
 
 Copyright (C) 2026 Davenonymous.
 
 This Perl distribution is released under the same terms as Perl itself.
-The bundled `ckdl` library (linked statically through `Alien::ckdl`) is
-MIT-licensed.
+The bundled `ckdl` library is MIT-licensed; see `ckdl/COPYING`.

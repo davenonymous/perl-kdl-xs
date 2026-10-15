@@ -1,5 +1,13 @@
 Revision history for Text-KDL-XS
 
+0.003  (unreleased)
+        Build:
+        - The ckdl sources are now bundled in the ckdl/ directory and
+          compiled into the extension. Alien::ckdl is no longer a
+          dependency, and installing needs no network access beyond
+          CPAN. ckdl/UPSTREAM.md names the bundled upstream commit
+          (the same one Alien::ckdl 0.001 built).
+
 0.002  2026-09-26
         Incompatible changes:
         - A string passed to parse_kdl or Text::KDL::XS::Parser->new is

@@ -94,19 +94,13 @@ This dist uses plain `ExtUtils::MakeMaker` plus
   will already exist locally. Delete it (`rm Text-KDL-XS-*.tar.gz`),
   bump the version, and start over.
 
-## Notes on the ckdl dependency
+## Notes on the bundled ckdl
 
-- `Text::KDL::XS` links against ckdl through the sibling `Alien::ckdl`
-  distribution, which itself pins a specific upstream ckdl commit. A
-  given Text-KDL-XS release is therefore reproducible against whichever
-  `Alien::ckdl` version was installed at build time. If you need to
-  bump the underlying ckdl, release a new `Alien::ckdl` first and
-  declare a minimum version in `PREREQ_PM`.
-- For the very first Text-KDL-XS release after `Alien::ckdl` itself
-  hits PAUSE, give the indexer time (~1 hour) to propagate before
-  pushing kdl-xs, otherwise CPAN clients will fail to resolve the
-  prerequisite.
-- `make disttest` builds and links the XS extension against the
-  installed `Alien::ckdl`. It does not re-fetch ckdl, so the release
-  step is fast and offline-capable as long as `Alien::ckdl` is already
-  installed.
+- The ckdl sources live in `ckdl/` and are compiled into the extension
+  by `Makefile.PL`, so every Text-KDL-XS release is reproducible on its
+  own: no Alien module, no system library, no network access beyond
+  CPAN. `ckdl/UPSTREAM.md` records the upstream commit and the steps to
+  bump it. A ckdl bump is an ordinary change: update the files, note it
+  in `Changes`, release.
+- `make disttest` builds the tarball from MANIFEST, so files added to
+  `ckdl/` must be listed there or the dist build fails.
