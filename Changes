@@ -1,6 +1,6 @@
 Revision history for Text-KDL-XS
 
-0.003  (unreleased)
+0.003  2026-10-15
         Build:
         - The ckdl sources are now bundled in the ckdl/ directory and
           compiled into the extension. Alien::ckdl is no longer a

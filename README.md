@@ -152,11 +152,11 @@ are. `ckdl/UPSTREAM.md` names the bundled upstream commit.
 
 ## Status
 
-Version 0.002 fixes the defects found in 0.001 (see `Changes`; what
-remains are the upstream limitations above) and changes one behaviour on
-purpose: string sources are character strings. The API
-(`parse_kdl`, `emit_kdl`, `Parser`, `Document`, `Node`, `Value`) is
-otherwise stable; `Value` gained `as_bignum`.
+Version 0.003 bundles the ckdl sources and drops the Alien::ckdl
+dependency; the API is unchanged. Version 0.002 fixed the defects found
+in 0.001 (see `Changes`; what remains are the upstream limitations
+above). The API (`parse_kdl`, `emit_kdl`, `Parser`, `Document`, `Node`,
+`Value`) is stable.
 
 ## See also
 
