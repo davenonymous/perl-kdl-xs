@@ -117,6 +117,65 @@ jobs:
             $MAKE
             HARNESS_OPTIONS=j4 $MAKE test
 
+  wide-nv:
+    name: Perl 5.40 with ${{ matrix.nv }} NVs on ubuntu-latest
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - nv: long double
+            configure: -Duselongdouble
+            name: longdouble
+          - nv: quadmath
+            configure: -Dusequadmath
+            name: quadmath
+    env:
+      PERL_VERSION: 5.40.2
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # setup-perl offers no long double or quadmath builds, so perl is
+      # built from source and cached; a cache miss costs about ten minutes.
+      - name: Restore the built perl
+        id: perl-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/perl-${{ matrix.name }}
+          key: perl-${{ env.PERL_VERSION }}-${{ matrix.name }}-${{ runner.os }}-${{ runner.arch }}-v1
+
+      - name: Build perl ${{ env.PERL_VERSION }} ${{ matrix.configure }}
+        if: steps.perl-cache.outputs.cache-hit != 'true'
+        working-directory: ${{ runner.temp }}
+        run: |
+          curl -sfL -o perl.tar.gz "https://www.cpan.org/src/5.0/perl-$PERL_VERSION.tar.gz"
+          tar xzf perl.tar.gz
+          cd "perl-$PERL_VERSION"
+          ./Configure -des -Dprefix="$HOME/perl-${{ matrix.name }}" ${{ matrix.configure }} >/dev/null
+          make -j"$(nproc)" >/dev/null
+          make install >/dev/null
+
+      - name: Use the built perl
+        run: echo "$HOME/perl-${{ matrix.name }}/bin" >> "$GITHUB_PATH"
+
+      - name: Show the NV type
+        run: perl -V:nvtype -V:nvsize -V:usequadmath -V:uselongdouble
+
+      # Devel::PPPort and Test::More ship with perl; no CPAN client needed.
+      - name: Configure, build and test
+        env:
+          HARNESS_OPTIONS: j4
+        run: |
+          perl Makefile.PL
+          make
+          make test
+
+      - name: Verbose test re-run on failure
+        if: failure()
+        run: prove -lvb t
+
   sanitizers:
     name: AddressSanitizer and UBSan (Perl 5.40 with threads)
     runs-on: ubuntu-latest

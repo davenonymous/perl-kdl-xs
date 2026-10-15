@@ -60,8 +60,9 @@ with `gh auth login`.
 
    If `gh run list` finds no run yet, wait a few seconds: GitHub
    creates it shortly after the push. Upload only when every job is
-   green, on every Perl and on Linux, macOS, Windows and FreeBSD;
-   `make release` refuses to upload otherwise. If one fails,
+   green: on every Perl, on Linux, macOS, Windows and FreeBSD, and on
+   the long double and quadmath perls; `make release` refuses to upload
+   otherwise. If one fails,
    fix the cause, commit, push and watch again.
 
 6. Cut and upload the release:
