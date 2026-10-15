@@ -4,6 +4,26 @@ This dist uses plain `ExtUtils::MakeMaker` plus
 [`cpan-upload`](https://metacpan.org/pod/cpan-upload) (from
 `CPAN::Uploader`). No Dist::Zilla, no Minilla, no surprises.
 
+## One-time setup
+
+```sh
+cpanm CPAN::Uploader
+```
+
+`cpan-upload` reads your PAUSE credentials from `~/.pause`:
+
+```text
+user     YOURPAUSEID
+password your-pause-password
+```
+
+Keep it private (`chmod 600 ~/.pause`). `make release` refuses to run
+without it.
+
+`make release` also reads the CI result of the release commit with the
+GitHub CLI, so install [`gh`](https://cli.github.com/) and log in once
+with `gh auth login`.
+
 ## Per-release checklist
 
 1. Make sure the working tree is clean and on `master`:
@@ -40,7 +60,8 @@ This dist uses plain `ExtUtils::MakeMaker` plus
 
    If `gh run list` finds no run yet, wait a few seconds: GitHub
    creates it shortly after the push. Upload only when every job is
-   green; `make release` refuses to upload otherwise. If one fails,
+   green, on every Perl and on Linux, macOS, Windows and FreeBSD;
+   `make release` refuses to upload otherwise. If one fails,
    fix the cause, commit, push and watch again.
 
 6. Cut and upload the release:
@@ -94,8 +115,13 @@ This dist uses plain `ExtUtils::MakeMaker` plus
   will already exist locally. Delete it (`rm Text-KDL-XS-*.tar.gz`),
   bump the version, and start over.
 
-## Notes on the bundled ckdl
+## Notes on dependencies
 
+- `Makefile.PL` is the only place the dependencies are declared; there
+  is no `cpanfile`.
+- `lib/Text/KDL/XS.pm` holds the dist version (`VERSION_FROM` in
+  `Makefile.PL`), and the XS object is built with it. The other modules
+  under `lib/` carry no `$VERSION` of their own.
 - The ckdl sources live in `ckdl/` and are compiled into the extension
   by `Makefile.PL`, so every Text-KDL-XS release is reproducible on its
   own: no Alien module, no system library, no network access beyond

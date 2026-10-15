@@ -9,13 +9,35 @@ on:
 
 jobs:
   test:
-    name: Perl ${{ matrix.perl }}${{ matrix.multi-thread && ' with threads' || '' }} on ubuntu-latest
-    runs-on: ubuntu-latest
+    name: Perl ${{ matrix.perl }}${{ matrix.multi-thread && ' with threads' || '' }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest]
+        distribution: [default]
         perl: ['5.34', '5.36', '5.38', '5.40']
         multi-thread: [false, true]
+        include:
+          # macOS exercises the HAVE_REALLOCF branch of Makefile.PL. The
+          # latest Perl both ways is enough there; the version spread
+          # runs on Linux.
+          - os: macos-latest
+            distribution: default
+            perl: latest
+            multi-thread: false
+          - os: macos-latest
+            distribution: default
+            perl: latest
+            multi-thread: true
+          # setup-perl's own Windows Perls 5.40+ are built against
+          # msvcrt, the runner's gcc against UCRT, and XS modules that
+          # mix both crash; Strawberry brings its Perl and gcc together
+          # and is always threaded.
+          - os: windows-latest
+            distribution: strawberry
+            perl: latest
+            multi-thread: true
 
     steps:
       - name: Checkout
@@ -25,11 +47,19 @@ jobs:
         uses: shogo82148/actions-setup-perl@v1
         with:
           perl-version: ${{ matrix.perl }}
+          distribution: ${{ matrix.distribution }}
           multi-thread: ${{ matrix.multi-thread }}
-          install-modules-with: cpanm
 
       - name: Show Perl configuration
         run: perl -V
+
+      # The make this Perl was built with (gmake on Windows)
+      - name: Find make
+        shell: perl {0}
+        run: |
+          use Config;
+          open my $env, '>>', $ENV{GITHUB_ENV} or die "GITHUB_ENV: $!";
+          print {$env} "MAKE=$Config{make}\n";
 
       - name: Install configure dependencies
         # cpanm --installdeps runs Makefile.PL to learn the prerequisites,
@@ -43,21 +73,49 @@ jobs:
         run: perl Makefile.PL
 
       - name: Build
-        run: make
+        run: ${{ env.MAKE }}
 
       - name: Test
         env:
           HARNESS_OPTIONS: j4
-        run: make test
+        run: ${{ env.MAKE }} test
 
       - name: Test the distribution tarball
         # Builds the tarball from MANIFEST, unpacks, configures and tests
-        # it, which catches files missing from MANIFEST.
+        # it, which catches files missing from MANIFEST. Once per
+        # workflow is enough; the Linux jobs run it.
+        if: runner.os == 'Linux'
         run: make disttest
 
       - name: Verbose test re-run on failure
         if: failure()
         run: prove -lvb t
+
+  freebsd:
+    name: Perl from pkg on FreeBSD
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build and test in a FreeBSD VM
+        # GitHub has no BSD runners; this boots a FreeBSD VM on the Linux
+        # runner and runs the scripts inside it. The packaged Perl is the
+        # one FreeBSD users have, and it exercises the HAVE_REALLOCF
+        # branch of Makefile.PL with clang.
+        uses: vmactions/freebsd-vm@v1
+        with:
+          prepare: pkg install -y perl5 p5-App-cpanminus
+          run: |
+            set -e
+            perl -V
+            cpanm --notest Devel::PPPort
+            cpanm --installdeps --notest --verbose .
+            perl Makefile.PL
+            MAKE=$(perl -MConfig -e 'print $Config{make}')
+            $MAKE
+            HARNESS_OPTIONS=j4 $MAKE test
 
   sanitizers:
     name: AddressSanitizer and UBSan (Perl 5.40 with threads)
@@ -72,7 +130,6 @@ jobs:
         with:
           perl-version: '5.40'
           multi-thread: true
-          install-modules-with: cpanm
 
       - name: Install configure dependencies
         run: cpanm --notest Devel::PPPort
