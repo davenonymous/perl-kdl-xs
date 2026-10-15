@@ -4,14 +4,10 @@ use Config;
 use ExtUtils::MakeMaker;
 use Devel::PPPort;
 
-# ckdl reports integers as long long and floats as double; the XS layer
-# stores them in IVs and NVs, which must be at least as wide (integers) or
-# exactly as wide (floats: a long double or quadmath NV would silently be
-# narrowed to a double). "OS unsupported" makes CPAN Testers report NA.
+# ckdl reports integers as long long; the XS layer stores them in IVs.
+# "OS unsupported" makes CPAN Testers report NA.
 die "OS unsupported: Text::KDL::XS needs a perl with 64-bit integers (ivsize >= 8)\n"
     unless $Config{ivsize} >= 8;
-die "OS unsupported: Text::KDL::XS needs a perl whose NV is a double (nvsize 8; not -Duselongdouble or -Dusequadmath)\n"
-    unless $Config{nvsize} == 8;
 
 # The ckdl sources under ckdl/ are compiled into the extension; see
 # ckdl/UPSTREAM.md for the pinned upstream commit and how to update it.

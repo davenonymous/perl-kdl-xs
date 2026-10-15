@@ -8,17 +8,17 @@ Revision history for Text-KDL-XS
           CPAN. ckdl/UPSTREAM.md names the bundled upstream commit
           (the same one Alien::ckdl 0.001 built).
         - ExtUtils::MakeMaker 7.06 or newer is required to configure.
-        - Perl 5.30 or newer and a perl whose NV is a double are now
-          required; Makefile.PL refuses other perls as unsupported.
-          Perls before 5.30 convert number text to floats without
-          correct rounding, so 17-digit floats did not round-trip; on
-          long double and quadmath perls every float was silently
-          narrowed to the double ckdl works in.
+        - Perl 5.30 or newer is required: older perls convert number
+          text to floats without correct rounding, so 17-digit floats
+          did not round-trip.
 
         Fixes:
-        - Floats are formatted with the C library's snprintf. On
-          quadmath perls my_snprintf panicked with "quadmath_snprintf
-          failed" for every float.
+        - Floats are read and written at the width of the perl's own
+          floating point type. On perls built with -Duselongdouble or
+          -Dusequadmath every float was narrowed to a double: 0.1 + 0.2
+          was written as 0.3, a parsed 0.1 was not the nearest long
+          double, and quadmath perls panicked with "quadmath_snprintf
+          failed" for every float (GitHub #1).
 
         Tests and platforms:
         - CI now covers macOS, Windows (Strawberry Perl) and FreeBSD

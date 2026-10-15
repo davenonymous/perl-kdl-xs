@@ -101,7 +101,8 @@ while (my $ev = $p->next_event) {
 - Tree API (`parse_kdl` / `emit_kdl`) with faithful round-tripping of
   argument order, property order, type annotations and number kinds.
   Floats are written with the shortest text that reads back as the same
-  double; integers exactly over the whole 64-bit signed and unsigned range.
+  float, at the width of the perl's floats; integers exactly over the
+  whole 64-bit signed and unsigned range.
 - Streaming event API for memory-bounded processing of large documents,
   with optional reporting of comments (including their text) and
   slashdashed elements.
@@ -147,8 +148,8 @@ make install
 
 The ckdl sources are bundled in the `ckdl` directory and compiled into
 the module, so no system package and no Alien module is needed. A C11
-compiler and a perl 5.30 or newer with 64-bit integers and a double NV
-are. `ckdl/UPSTREAM.md` names the bundled upstream commit.
+compiler and a perl 5.30 or newer with 64-bit integers are.
+`ckdl/UPSTREAM.md` names the bundled upstream commit.
 
 ## Status
 
