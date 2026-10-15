@@ -146,9 +146,9 @@ make install
 ```
 
 The ckdl sources are bundled in the `ckdl` directory and compiled into
-the module, so no system package and no Alien module is needed; a C11
-compiler and a perl with 64-bit integers are. `ckdl/UPSTREAM.md` names
-the bundled upstream commit.
+the module, so no system package and no Alien module is needed. A C11
+compiler and a perl 5.30 or newer with 64-bit integers and a double NV
+are. `ckdl/UPSTREAM.md` names the bundled upstream commit.
 
 ## Status
 

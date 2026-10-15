@@ -204,7 +204,11 @@ ptkx_copy_text(char* buf, const char* text)
 /* Writes d as a KDL number into buf (PTKX_NUMBER_BUFSIZE bytes): the
  * shortest of %.15g, %.16g and %.17g that strtod() reads back as d, with
  * ".0" appended when the text would otherwise read back as an integer;
- * #inf, #-inf or #nan when d is not finite. Returns the length. */
+ * #inf, #-inf or #nan when d is not finite. Returns the length.
+ *
+ * The C library's snprintf() formats the double, not my_snprintf(): on a
+ * quadmath perl my_snprintf() accepts no floating point format other
+ * than %Qg and panics. */
 static STRLEN
 ptkx_format_double(pTHX_ double d, char* buf)
 {
@@ -218,7 +222,7 @@ ptkx_format_double(pTHX_ double d, char* buf)
 
     PTKX_NUMERIC_STANDARD();
     for (precision = 15; precision <= 17; ++precision) {
-        len = (STRLEN) my_snprintf(buf, PTKX_NUMBER_BUFSIZE, "%.*g", precision, d);
+        len = (STRLEN) snprintf(buf, PTKX_NUMBER_BUFSIZE, "%.*g", precision, d);
         if (strtod(buf, NULL) == d) break;
     }
     PTKX_NUMERIC_RESTORE();
@@ -242,7 +246,7 @@ ptkx_correctly_rounded(pTHX_ double d)
     if (Perl_isnan(d) || Perl_isinf(d)) return d;
 
     PTKX_NUMERIC_STANDARD();
-    my_snprintf(buf, sizeof buf, "%.15g", d);
+    snprintf(buf, sizeof buf, "%.15g", d);
     rounded = strtod(buf, NULL);
     PTKX_NUMERIC_RESTORE();
     return rounded;

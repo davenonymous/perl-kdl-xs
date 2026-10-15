@@ -910,8 +910,10 @@ Values are created as small blessed hashes; a document with a million
 values needs about 500 MB as a tree. Use L<Text::KDL::XS::Parser> for
 anything of that size.
 
-The module requires Perl 5.12 or newer built with 64-bit integers
-(C<ivsize> 8, the default on 64-bit platforms).
+The module requires Perl 5.30 or newer built with 64-bit integers and
+a double NV (C<ivsize> 8 and C<nvsize> 8, the defaults on 64-bit
+platforms; perls built with C<-Duselongdouble> or C<-Dusequadmath> are
+refused, since ckdl works in doubles).
 
 =head1 SEE ALSO
 
